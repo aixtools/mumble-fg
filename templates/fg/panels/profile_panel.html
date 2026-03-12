@@ -36,20 +36,20 @@
                 </form>
                 <form method="post" action="{% url 'mumble:deactivate' panel.server.pk %}" style="margin-left: auto;">
                     {% csrf_token %}
-                    <button type="submit" class="btn btn-outline btn-xs" style="color: var(--danger-color); border-color: var(--danger-color);" onclick="return confirm('{% trans "Deactivate your Mumble account?" %}');">{% trans "Deactivate" %}</button>
+                    <button type="submit" class="btn btn-outline btn-xs" style="color: var(--danger-color); border-color: var(--danger-color);" onclick="return confirm('{% trans "Deactivate your Murmur account?" %}');">{% trans "Deactivate" %}</button>
                 </form>
             </div>
             <form method="post" action="{% url 'mumble:set_password' panel.server.pk %}" style="margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center;">
                 {% csrf_token %}
-                <input type="password" name="mumble_password" placeholder="{% trans 'Custom password (min 8)' %}" minlength="8" required
+                <input type="password" name="murmur_password" placeholder="{% trans 'Custom password (min 8)' %}" minlength="8" required
                        style="flex: 1; padding: 0.35rem 0.5rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.85rem;">
                 <button type="submit" class="btn btn-outline btn-xs">{% trans "Set Password" %}</button>
             </form>
         {% else %}
-            <p style="color: var(--text-muted); margin-bottom: 1rem;">{% trans "Activate a Mumble account to join fleet voice comms." %}</p>
+            <p style="color: var(--text-muted); margin-bottom: 1rem;">{% trans "Activate a Murmur account to join fleet voice comms." %}</p>
             <form method="post" action="{% url 'mumble:activate' panel.server.pk %}">
                 {% csrf_token %}
-                <button type="submit" class="btn btn-primary btn-xs">{% trans "Get Mumble Credentials" %}</button>
+                <button type="submit" class="btn btn-primary btn-xs">{% trans "Get Murmur Credentials" %}</button>
             </form>
         {% endif %}
     </div>

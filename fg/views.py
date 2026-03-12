@@ -201,7 +201,7 @@ def activate(request, server_id):
     server = get_object_or_404(MumbleServer, pk=server_id, is_active=True)
 
     if MumbleUser.objects.filter(user=request.user, server=server).exists():
-        messages.info(request, _('Mumble account already exists on this server.'))
+        messages.info(request, _('Murmur account already exists on this server.'))
         return redirect('profile')
 
     password = _generate_password()
@@ -225,13 +225,13 @@ def activate(request, server_id):
         )
         messages.warning(
             request,
-            _('Mumble account was created locally, but Murmur registration sync failed. Requesting a new password later will retry it.'),
+            _('Murmur account was created locally, but Murmur registration sync failed. Requesting a new password later will retry it.'),
         )
     else:
         if mumble_user.mumble_userid != murmur_userid:
             mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Mumble account created.'))
+        messages.success(request, _('Murmur account created.'))
     request.session[f'murmur_temp_password_{server_id}'] = password
     return redirect('profile')
 
@@ -242,7 +242,7 @@ def reset_password(request, server_id):
     try:
         mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
     except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Mumble account found.'))
+        messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
     password = _generate_password()
@@ -257,13 +257,13 @@ def reset_password(request, server_id):
         )
         messages.warning(
             request,
-            _('Mumble password reset request could not complete now. Retrying later will request a new password again.'),
+            _('Murmur password reset request could not complete now. Retrying later will request a new password again.'),
         )
     else:
         if mumble_user.mumble_userid != murmur_userid:
             mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Mumble password has been reset.'))
+        messages.success(request, _('Murmur password has been reset.'))
     request.session[f'murmur_temp_password_{server_id}'] = password
     return redirect('profile')
 
@@ -274,10 +274,10 @@ def set_password(request, server_id):
     try:
         mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
     except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Mumble account found.'))
+        messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
-    password = request.POST.get('mumble_password', '')
+    password = request.POST.get('murmur_password', '')
     if len(password) < 8:
         messages.error(request, _('Password must be at least 8 characters.'))
         return redirect('profile')
@@ -296,13 +296,13 @@ def set_password(request, server_id):
         )
         messages.warning(
             request,
-            _('Mumble password set request could not complete now. Retrying later will re-issue the request.'),
+            _('Murmur password set request could not complete now. Retrying later will re-issue the request.'),
         )
     else:
         if mumble_user.mumble_userid != murmur_userid:
             mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Mumble password updated.'))
+        messages.success(request, _('Murmur password updated.'))
     return redirect('profile')
 
 
@@ -312,7 +312,7 @@ def deactivate(request, server_id):
     try:
         mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
     except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Mumble account found.'))
+        messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
     try:
@@ -326,21 +326,21 @@ def deactivate(request, server_id):
         )
         messages.error(
             request,
-            _('Mumble account could not be deactivated because Murmur registration sync failed.'),
+            _('Murmur account could not be deactivated because Murmur registration sync failed.'),
         )
         return redirect('profile')
 
     try:
         mumble_user.delete()
-        messages.success(request, _('Mumble account deactivated.'))
+        messages.success(request, _('Murmur account deactivated.'))
     except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Mumble account found.'))
+        messages.error(request, _('No Murmur account found.'))
     return redirect('profile')
 
 
 def _can_manage_mumble(user):
     # Legacy access path retained for now. This should eventually be replaced
-    # by explicit Mumble permission checks so presence/admin access flows
+    # by explicit Murmur permission checks so presence/admin access flows
     # through one permission model instead of overlapping staff/group gates.
     return user.is_staff or _user_is_alliance_leader(user) or user.has_perm('mumble.manage_mumble_admin')
 
@@ -429,7 +429,7 @@ def toggle_admin(request, mumble_user_id):
             _('Admin status was updated locally, but live Murmur session sync failed. Connected users may need to reconnect.'),
         )
     status = _('granted') if mumble_user.is_mumble_admin else _('revoked')
-    messages.success(request, _('Mumble admin %(status)s for %(user)s.') % {
+    messages.success(request, _('Murmur admin %(status)s for %(user)s.') % {
         'status': status, 'user': mumble_user.username,
     })
     if synced_sessions:

@@ -1,17 +1,17 @@
 {% extends 'base.html' %}
 {% load i18n %}
 
-{% block title %}{% trans "Mumble Admin Management" %} - Pilot{% endblock %}
+{% block title %}{% trans "Murmur Admin Management" %} - Pilot{% endblock %}
 
 {% block content %}
 <div class="page-header">
-    <h1>{% trans "Mumble Admin Management" %}</h1>
+    <h1>{% trans "Murmur Admin Management" %}</h1>
 </div>
 
 <div style="padding: 0 2rem 2rem;">
     <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px;">
         <div style="padding: 12px 16px; border-bottom: 2px solid var(--primary-color); background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%);">
-            <h2 style="color: var(--primary-color); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0;">{% trans "Mumble Users" %}</h2>
+            <h2 style="color: var(--primary-color); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0;">{% trans "Murmur Users" %}</h2>
         </div>
         <div style="padding: 16px;">
             {% if mumble_users %}
@@ -103,7 +103,7 @@
                 </tbody>
             </table>
             {% else %}
-                <p style="color: var(--text-secondary); font-size: 13px; margin: 0;">{% trans "No active Mumble users found." %}</p>
+                <p style="color: var(--text-secondary); font-size: 13px; margin: 0;">{% trans "No active Murmur users found." %}</p>
             {% endif %}
         </div>
     </div>

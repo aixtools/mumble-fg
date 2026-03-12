@@ -108,23 +108,18 @@ Practical consequence:
 - `mumble-fg` should send control actions through `mumble_control`, not through
   shared imports or direct DB writes
 
-## FG `mumble_` Naming Audit
+## FG Murmur Naming
 
-Current fg usage of `mumble_` is mostly interface/product-level and should be
-treated separately from bg model contracts:
+FG user-facing contract language is Murmur-first:
 
-- `mumble` runtime control and UX routes: `mumble_manage`, `toggle-admin`,
-  `mumble_control`.
-- permission and session keys: `manage_mumble_admin`, `view_mumble_presence`,
-  `murmur_temp_password_*`.
-- helper entry points and command utilities: `update_mumble_groups`,
-  `update_all_mumble_groups`, `sync_murmur_registration`, etc.
-- data objects/fields that already map to existing Murmur db tables:
-  `murmur_userid`, `MumbleUser`, `mumble_control` DB fields.
+- UI labels and operator messages use `Murmur`.
+- panel and control flows use the `murmur_*` session and probe fields.
+- reverse relations align to bg ownership (`murmur_registrations`, `murmur_sessions`).
 
-For bg-facing reverse-relations, the current synced surface is intentionally
-`murmur_registrations` and `murmur_sessions`; fg references should align to those
-and the legacy relation names are no longer used for runtime model coupling.
+Remaining `mumble_*` identifiers are limited to legacy Django permission
+codename compatibility (`manage_mumble_admin`, `view_mumble_presence`,
+`view_mumble_presence_history`) and should not be used for new UI or payload
+field design.
 
 ## ICE / Murmur Rules
 

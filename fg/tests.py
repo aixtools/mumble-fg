@@ -291,12 +291,12 @@ class MumbleModelTest(TestCase):
         self.assertIsNotNone(mu.updated_at)
 
     def test_db_table(self):
-        self.assertEqual(MumbleUser._meta.db_table, 'mumble_mumbleuser')
+        self.assertEqual(MumbleUser._meta.db_table, 'mumble_user')
 
     def test_fk_relationship(self):
         user = User.objects.create_user('testuser', password='pass')
         MumbleUser.objects.create(user=user, server=self.server, username='Test_Pilot', pwhash='h')
-        self.assertEqual(user.mumble_accounts.first().username, 'Test_Pilot')
+        self.assertEqual(user.murmur_registrations.first().username, 'Test_Pilot')
 
     def test_unique_together(self):
         user = User.objects.create_user('testuser', password='pass')
@@ -310,7 +310,7 @@ class MumbleModelTest(TestCase):
         server2 = _make_server(name='Server 2', address='mumble2.example.com:64738')
         MumbleUser.objects.create(user=user, server=self.server, username='Test_Pilot', pwhash='h')
         MumbleUser.objects.create(user=user, server=server2, username='Test_Pilot', pwhash='h')
-        self.assertEqual(user.mumble_accounts.count(), 2)
+        self.assertEqual(user.murmur_registrations.count(), 2)
 
     def test_mumble_userid_unique_per_server(self):
         user1 = User.objects.create_user('testuser1', password='pass')
@@ -635,7 +635,7 @@ class SetPasswordViewTest(TestCase):
     def test_set_valid_password(self):
         resp = self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'mysecurepassword'},
+            {'murmur_password': 'mysecurepassword'},
         )
         self.assertEqual(resp.status_code, 302)
         self.mu.refresh_from_db()
@@ -644,7 +644,7 @@ class SetPasswordViewTest(TestCase):
     def test_set_short_password_rejected(self):
         self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'short'},
+            {'murmur_password': 'short'},
             follow=True,
         )
         self.mu.refresh_from_db()
@@ -653,7 +653,7 @@ class SetPasswordViewTest(TestCase):
     def test_set_restricted_characters_rejected(self):
         self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'bad\\pass1'},
+            {'murmur_password': 'bad\\pass1'},
             follow=True,
         )
         self.mu.refresh_from_db()
@@ -664,7 +664,7 @@ class SetPasswordViewTest(TestCase):
         self.mu.delete()
         resp = self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'longenoughpw'},
+            {'murmur_password': 'longenoughpw'},
             follow=True,
         )
         self.assertEqual(resp.status_code, 200)
@@ -672,7 +672,7 @@ class SetPasswordViewTest(TestCase):
     def test_password_verifies(self):
         self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'myfleetpassword'},
+            {'murmur_password': 'myfleetpassword'},
         )
         self.mu.refresh_from_db()
         self.assertEqual(self.mu.pwhash, 'oldhash')
@@ -731,7 +731,7 @@ class ToggleAdminViewTest(TestCase):
         self.assertIn('admin', [group for group in self.mu.groups.split(',') if group])
         self.assertEqual(mock_sync_live_admin_membership.call_args[0][0].pk, self.mu.pk)
         messages = [message.message for message in response.context['messages']]
-        self.assertIn('Mumble admin granted for Target_User.', messages)
+        self.assertIn('Murmur admin granted for Target_User.', messages)
         self.assertIn('Updated 2 active Murmur session(s) immediately.', messages)
 
     @patch('fg.views._sync_live_admin_membership', side_effect=MurmurSyncError('boom'))
@@ -747,7 +747,7 @@ class ToggleAdminViewTest(TestCase):
         self.assertIn('admin', [group for group in self.mu.groups.split(',') if group])
         self.assertEqual(mock_sync_live_admin_membership.call_args[0][0].pk, self.mu.pk)
         messages = [message.message for message in response.context['messages']]
-        self.assertIn('Mumble admin granted for Target_User.', messages)
+        self.assertIn('Murmur admin granted for Target_User.', messages)
         self.assertIn(
             'Admin status was updated locally, but live Murmur session sync failed. Connected users may need to reconnect.',
             messages,
@@ -1069,7 +1069,7 @@ class ProfileContextTest(TestCase):
 
     def test_profile_shows_activate_button(self):
         resp = self.client.get(reverse('profile'))
-        self.assertContains(resp, 'Get Mumble Credentials')
+        self.assertContains(resp, 'Get Murmur Credentials')
 
     def test_profile_shows_mumble_username(self):
         MumbleUser.objects.create(
@@ -1077,7 +1077,7 @@ class ProfileContextTest(TestCase):
         )
         resp = self.client.get(reverse('profile'))
         self.assertContains(resp, 'Test_User')
-        self.assertNotContains(resp, 'Get Mumble Credentials')
+        self.assertNotContains(resp, 'Get Murmur Credentials')
 
     def test_temp_password_shown_once(self):
         session = self.client.session

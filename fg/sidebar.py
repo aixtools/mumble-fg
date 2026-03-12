@@ -17,7 +17,7 @@ SIDEBAR_ITEMS = [
     {
         'key': 'mumble_manage',
         'parent_key': 'alliance',
-        'label': _('Mumble Admins'),
+        'label': _('Murmur Admins'),
         'url_name': 'mumble:manage',
         'icon_svg': (
             '<svg class="sidebar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" '
