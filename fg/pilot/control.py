@@ -37,6 +37,21 @@ def _control_timeout() -> int:
     return int(getattr(settings, 'MUMBLE_CONTROL_TIMEOUT_SECONDS', REQUEST_TIMEOUT_SECONDS))
 
 
+def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if content_type_json:
+        headers['Content-Type'] = 'application/json'
+
+    shared_secret = (
+        getattr(settings, 'MUMBLE_CONTROL_PSK', None)
+        or getattr(settings, 'MUMBLE_CONTROL_SHARED_SECRET', None)
+        or ''
+    ).strip()
+    if shared_secret:
+        headers['X-Mumble-Control-PSK'] = shared_secret
+    return headers
+
+
 def _control_envelope(payload: dict[str, Any], *, requested_by: str | None) -> dict[str, Any]:
     request_id = str(uuid.uuid4())
     requested_by_value = requested_by or 'system'
@@ -48,18 +63,7 @@ def _control_envelope(payload: dict[str, Any], *, requested_by: str | None) -> d
     }
 
 
-def _post_json(path: str, payload: dict[str, Any], *, requested_by: str | None = None) -> dict[str, Any]:
-    url = f'{_control_base_url()}{path}'
-    body = json.dumps(_control_envelope(payload, requested_by=requested_by)).encode('utf-8')
-    request = Request(url, data=body, method='POST', headers={'Content-Type': 'application/json'})
-    try:
-        with urlopen(request, timeout=_control_timeout()) as response:
-            raw = response.read()
-    except HTTPError as exc:
-        raise MumbleSyncError(f'Control request failed ({exc.code}): {exc.reason}') from exc
-    except URLError as exc:
-        raise MumbleSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
-
+def _decode_json_response(raw: bytes) -> dict[str, Any]:
     if not raw:
         return {}
     try:
@@ -69,12 +73,68 @@ def _post_json(path: str, payload: dict[str, Any], *, requested_by: str | None =
 
     if not isinstance(result, dict):
         raise MumbleSyncError('Control response shape is invalid')
+    return result
+
+
+def _request_json(
+    path: str,
+    *,
+    method: str,
+    payload: dict[str, Any] | None = None,
+    requested_by: str | None = None,
+    allow_not_found: bool = False,
+) -> dict[str, Any]:
+    url = f'{_control_base_url()}{path}'
+    body = None
+    if payload is not None:
+        body = json.dumps(_control_envelope(payload, requested_by=requested_by)).encode('utf-8')
+    request = Request(
+        url,
+        data=body,
+        method=method,
+        headers=_control_headers(content_type_json=payload is not None),
+    )
+    try:
+        with urlopen(request, timeout=_control_timeout()) as response:
+            raw = response.read()
+    except HTTPError as exc:
+        error_reason = str(exc.reason)
+        try:
+            parsed_error = _decode_json_response(exc.read())
+        except MumbleSyncError:
+            parsed_error = {}
+
+        if parsed_error:
+            if (
+                allow_not_found
+                and exc.code == 404
+                and str(parsed_error.get('status', '')).lower() == 'not_found'
+            ):
+                return parsed_error
+            error_reason = str(parsed_error.get('message') or parsed_error.get('status') or error_reason)
+
+        raise MumbleSyncError(f'Control request failed ({exc.code}): {error_reason}') from exc
+    except URLError as exc:
+        raise MumbleSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
+
+    result = _decode_json_response(raw)
 
     status = str(result.get('status', 'completed')).lower()
-    if status not in {'accepted', 'completed'}:
+    allowed_statuses = {'accepted', 'completed'}
+    if allow_not_found:
+        allowed_statuses.add('not_found')
+    if status not in allowed_statuses:
         raise MumbleSyncError(str(result.get('message', 'control rejected request')))
 
     return result
+
+
+def _post_json(path: str, payload: dict[str, Any], *, requested_by: str | None = None) -> dict[str, Any]:
+    return _request_json(path, method='POST', payload=payload, requested_by=requested_by)
+
+
+def _get_json(path: str, *, allow_not_found: bool = False) -> dict[str, Any]:
+    return _request_json(path, method='GET', allow_not_found=allow_not_found)
 
 
 def _extract_mumble_userid(response: dict[str, Any]) -> int | None:

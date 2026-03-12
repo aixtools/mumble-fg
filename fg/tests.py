@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -16,7 +17,7 @@ from fg.passwords import (
     verify_murmur_password,
 )
 from modules.corporation.models import CorporationSettings
-from fg.pilot.control import MumbleSyncError, sync_live_admin_membership
+from fg.pilot.control import MumbleSyncError, _post_json, sync_live_admin_membership
 from fg.pilot.models import MumbleServer, MumbleSession, MumbleUser
 from fg.views import (
     _PASSWORD_ALPHABET,
@@ -31,6 +32,20 @@ _NO_REDIS = dict(
     CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
     SESSION_ENGINE='django.contrib.sessions.backends.db',
 )
+
+
+class _JsonResponseStub:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode('utf-8')
 
 
 def _make_server(**kwargs):
@@ -376,6 +391,28 @@ class MumbleSessionModelTest(TestCase):
         self.assertIn('view_mumble_presence_history', codenames)
 
 
+class ControlClientAuthTest(TestCase):
+    @override_settings(MUMBLE_CONTROL_PSK='primary-control-secret')
+    @patch('fg.pilot.control.urlopen')
+    def test_post_json_sends_control_psk_header(self, mock_urlopen):
+        mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
+
+        _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header('X-mumble-control-psk'), 'primary-control-secret')
+
+    @override_settings(MUMBLE_CONTROL_PSK='', MUMBLE_CONTROL_SHARED_SECRET='fallback-control-secret')
+    @patch('fg.pilot.control.urlopen')
+    def test_post_json_uses_shared_secret_fallback_header(self, mock_urlopen):
+        mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
+
+        _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header('X-mumble-control-psk'), 'fallback-control-secret')
+
+
 class LiveAdminSyncTest(TestCase):
     def setUp(self):
         self.server = _make_server()
@@ -431,7 +468,6 @@ class LiveAdminSyncTest(TestCase):
         MumbleSession.objects.filter(mumble_user=self.mu).update(is_active=False)
 
         synced_sessions = sync_live_admin_membership(self.mu)
-
         self.assertEqual(synced_sessions, 0)
         mock_post_json.assert_not_called()
 
