@@ -8,15 +8,15 @@ on:
   workflow_dispatch:
     inputs:
       deploy_target_name:
-        description: 'Secret name containing deploy target JSON (host/user/key)'
+        description: 'Secret name containing deploy target JSON'
         required: false
-        default: 'CUBE_DEV_CUBE'
+        default: 'DEV_DEPLOY_TARGET'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      DEPLOY_TARGET_NAME: ${{ github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE' }}
+      DEPLOY_TARGET_NAME: ${{ github.event.inputs.deploy_target_name || 'DEV_DEPLOY_TARGET' }}
 
     steps:
       - name: Checkout code
@@ -24,7 +24,7 @@ jobs:
 
       - name: Resolve deploy target
         env:
-          DEPLOY_TARGET_JSON: ${{ secrets[github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE'] }}
+          DEPLOY_TARGET_JSON: ${{ secrets[github.event.inputs.deploy_target_name || 'DEV_DEPLOY_TARGET'] }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -51,6 +51,9 @@ jobs:
           host = str(payload.get("host", "")).strip()
           user = str(payload.get("user", "")).strip()
           key = payload.get("key", "")
+          home_dir = str(payload.get("home_dir", "")).strip()
+          project_dir = str(payload.get("project_dir", "")).strip()
+          service_units = payload.get("service_units", [])
 
           if not host:
               raise SystemExit(f"Secret {target_name} missing required field: host")
@@ -58,6 +61,15 @@ jobs:
               raise SystemExit(f"Secret {target_name} missing required field: user")
           if not isinstance(key, str) or not key.strip():
               raise SystemExit(f"Secret {target_name} missing required field: key")
+          if not home_dir:
+              home_dir = f"/home/{user}"
+          if not project_dir:
+              project_dir = f"{home_dir}/mumble-fg"
+          if service_units is None:
+              service_units = []
+          if not isinstance(service_units, list):
+              raise SystemExit(f"Secret {target_name} field service_units must be a JSON list")
+          service_units = [str(unit).strip() for unit in service_units if str(unit).strip()]
 
           key_path = Path.home() / ".ssh" / "deploy_key"
           key_path.write_text(key.replace("\\n", "\n").rstrip() + "\n", encoding="utf-8")
@@ -67,6 +79,9 @@ jobs:
           with github_env.open("a", encoding="utf-8") as fh:
               fh.write(f"DEPLOY_TARGET_HOST={host}\n")
               fh.write(f"DEPLOY_TARGET_USER={user}\n")
+              fh.write(f"DEPLOY_HOME_DIR={home_dir}\n")
+              fh.write(f"DEPLOY_PROJECT_DIR={project_dir}\n")
+              fh.write(f"DEPLOY_SERVICE_UNITS_CSV={','.join(service_units)}\n")
           PY
 
       - name: Set up SSH known hosts
@@ -85,12 +100,18 @@ jobs:
             --exclude '.env' \
             --exclude '.venv/' \
             -e "ssh -i ~/.ssh/deploy_key" \
-            ./ "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}:/home/cube/mumble-fg/"
+            ./ "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}:${DEPLOY_PROJECT_DIR%/}/"
 
       - name: Restart host services (best effort)
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" << 'EOF'
+          if [ -z "${DEPLOY_SERVICE_UNITS_CSV:-}" ]; then
+            echo "No service_units configured in deploy target; skipping restarts."
+            exit 0
+          fi
+
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "DEPLOY_SERVICE_UNITS_CSV='${DEPLOY_SERVICE_UNITS_CSV}' bash -s" <<'EOF'
           set -euo pipefail
 
           if ! sudo -n true >/dev/null 2>&1; then
@@ -108,13 +129,14 @@ jobs:
             fi
           }
 
-          restart_if_present cube-django.service
-          restart_if_present cube-celery.service
-          restart_if_present cube-celery-beat.service
+          IFS=',' read -r -a service_units <<< "${DEPLOY_SERVICE_UNITS_CSV}"
+          for service_unit in "${service_units[@]}"; do
+            restart_if_present "${service_unit}"
+          done
           EOF
 
       - name: Deploy path sanity check
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
-            "test -f /home/cube/mumble-fg/fg/views.py && test -f /home/cube/mumble-fg/templates/fg/panels/profile_panel.html"
+            "test -f ${DEPLOY_PROJECT_DIR%/}/fg/views.py && test -f ${DEPLOY_PROJECT_DIR%/}/templates/fg/panels/profile_panel.html"

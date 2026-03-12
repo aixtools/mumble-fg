@@ -4,7 +4,7 @@ This document covers `mumble-fg` deployment to a dev host using GitHub Actions.
 
 `mumble-fg` is UI/integration code (not a standalone daemon). Deploy means:
 
-- syncing this repository to `/home/cube/mumble-fg`
+- syncing this repository to a configured target directory
 - ensuring host Django imports `fg` and can load `templates/`
 - configuring FG -> BG control transport in the host Django runtime
 
@@ -12,26 +12,19 @@ This document covers `mumble-fg` deployment to a dev host using GitHub Actions.
 
 The workflow in `.github/workflows/deploy-dev.yml`:
 
-- resolves deploy target from a single JSON secret (default `CUBE_DEV_CUBE`)
-- rsyncs this repository to `/home/cube/mumble-fg`
-- attempts best-effort restart of host app services (`cube-django`, celery units)
+- resolves deploy target from a single JSON secret (default `DEV_DEPLOY_TARGET`)
+- rsyncs this repository to `project_dir` (defaults to `/home/<user>/mumble-fg`)
+- optionally restarts units listed in `service_units`
 - verifies expected FG files exist on the host
 
 It does not create host Django settings, manage Python packages, or write FG
 runtime secrets.
 
-## Assumptions
-
-- host app checkout exists at `/home/cube/Cube`
-- deploy path is `/home/cube/mumble-fg`
-- SSH public key for the deploy target is in the target user's `authorized_keys`
-- host runtime is already wired to import FG code/templates
-
 ## GitHub Actions Configuration
 
 Required:
 
-- deploy target JSON secret (default secret name: `CUBE_DEV_CUBE`)
+- deploy target JSON secret (default secret name: `DEV_DEPLOY_TARGET`)
 
 Optional:
 
@@ -43,9 +36,12 @@ Target JSON shape:
 
 ```json
 {
-  "host": "cube-dev",
-  "user": "cube",
-  "key": "-----BEGIN OPENSSH PRIVATE KEY-----\\n...\\n-----END OPENSSH PRIVATE KEY-----"
+  "host": "dev-host.example.net",
+  "user": "deploy",
+  "key": "-----BEGIN OPENSSH PRIVATE KEY-----\\n...\\n-----END OPENSSH PRIVATE KEY-----",
+  "home_dir": "/home/deploy",
+  "project_dir": "/home/deploy/mumble-fg",
+  "service_units": ["web.service", "worker.service", "scheduler.service"]
 }
 ```
 
@@ -55,13 +51,19 @@ Required fields:
 - `user`
 - `key`
 
+Optional fields:
+
+- `home_dir` (default `/home/<user>`)
+- `project_dir` (default `<home_dir>/mumble-fg`)
+- `service_units` (array of systemd unit names; when omitted, restart step is skipped)
+
 ## Host Runtime Settings (Not GitHub Secrets)
 
 Set these in the host environment used by Django:
 
 - `MURMUR_CONTROL_URL` (or `MURMUR_CONTROL_BASE_URL`)
 - `MURMUR_CONTROL_PSK` (or `MURMUR_CONTROL_SHARED_SECRET`)
-- `MURMUR_PANEL_HOST` (for provider selection; for Cube use `cube`)
+- `MURMUR_PANEL_HOST` (provider selection key for your host integration)
 - `MURMUR_MODEL_APP_LABEL` (usually `mumble`)
 
 Optional:
@@ -71,8 +73,8 @@ Optional:
 
 ## One-Time Host Wiring Checklist
 
-1. Ensure Django can import FG package code (for example via `PYTHONPATH=/home/cube/mumble-fg`).
-2. Add `/home/cube/mumble-fg/templates` to Django `TEMPLATES[...]["DIRS"]`.
+1. Ensure Django can import FG package code (for example via `PYTHONPATH=<project_dir>`).
+2. Add `<project_dir>/templates` to Django `TEMPLATES[...]["DIRS"]`.
 3. Mount FG URLs in host URLconf.
 4. Register sidebar and profile panel integration from FG integration classes.
 
