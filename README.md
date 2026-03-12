@@ -35,3 +35,4 @@ This split is intentionally incomplete. The Django code here still expects broad
 Those seams should be redesigned explicitly rather than left shared implicitly.
 
 Shared fg/bg naming and boundary conventions are documented in [docs/conventions.md](/home/michael/prj/mumble-fg/docs/conventions.md).
+Backup and restore verification steps are documented in [docs/pilot-backup-restore-probe.md](/home/michael/prj/mumble-fg/docs/pilot-backup-restore-probe.md).
