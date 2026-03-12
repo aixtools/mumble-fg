@@ -308,71 +308,7 @@ class BgControlClient:
         return resolved_password, _extract_mumble_userid(response)
 
 
-_CONTROL_CLIENT = BgControlClient()
-
-
-def control_client() -> BgControlClient:
-    return _CONTROL_CLIENT
-
-
-def sync_mumble_registration(
-    mumble_user,
-    password=None,
-    *,
-    requested_by: str | None = None,
-) -> int | None:
-    return control_client().sync_mumble_registration(
-        mumble_user,
-        password=password,
-        requested_by=requested_by,
-    )
-
-
-def unregister_mumble_registration(mumble_user, *, requested_by: str | None = None) -> bool:
-    return control_client().unregister_mumble_registration(
-        mumble_user,
-        requested_by=requested_by,
-    )
-
-
-def probe_mumble_registration(mumble_user) -> dict[str, Any] | None:
-    return control_client().probe_mumble_registration(mumble_user)
-
-
-def sync_live_admin_membership(
-    mumble_user,
-    *,
-    requested_by: str | None = None,
-    session_ids: Iterable[int] | None = None,
-) -> int:
-    return control_client().sync_live_admin_membership(
-        mumble_user,
-        requested_by=requested_by,
-        session_ids=session_ids,
-    )
-
-
-def reset_mumble_password(
-    mumble_user,
-    password: str | None = None,
-    *,
-    requested_by: str | None = None,
-) -> tuple[str, int | None]:
-    return control_client().reset_mumble_password(
-        mumble_user,
-        password=password,
-        requested_by=requested_by,
-    )
-
-
 __all__ = [
     'MumbleSyncError',
     'BgControlClient',
-    '_post_json',
-    'control_client',
-    'probe_mumble_registration',
-    'reset_mumble_password',
-    'sync_live_admin_membership',
-    'sync_mumble_registration',
-    'unregister_mumble_registration',
 ]

@@ -19,7 +19,7 @@ from fg.passwords import (
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
-from fg.pilot.control import MumbleSyncError, _post_json, sync_live_admin_membership
+from fg.pilot.control import BgControlClient, MumbleSyncError, _post_json
 from fg.pilot.models import MumbleServer, MumbleSession, MumbleUser
 from fg.views import (
     _PASSWORD_ALPHABET,
@@ -419,6 +419,7 @@ class LiveAdminSyncTest(TestCase):
     def setUp(self):
         self.server = _make_server()
         self.user = User.objects.create_user('pulseuser', password='pass')
+        self.control_client = BgControlClient()
         self.mu = MumbleUser.objects.create(
             user=self.user,
             server=self.server,
@@ -431,7 +432,7 @@ class LiveAdminSyncTest(TestCase):
     def test_grant_posts_contract_payload(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
 
-        synced_sessions = sync_live_admin_membership(self.mu)
+        synced_sessions = self.control_client.sync_live_admin_membership(self.mu)
 
         self.assertEqual(synced_sessions, 2)
         mock_post_json.assert_called_once()
@@ -447,7 +448,7 @@ class LiveAdminSyncTest(TestCase):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
         self.mu.is_mumble_admin = False
 
-        synced_sessions = sync_live_admin_membership(self.mu)
+        synced_sessions = self.control_client.sync_live_admin_membership(self.mu)
 
         self.assertEqual(synced_sessions, 2)
         path, payload = mock_post_json.call_args.args
@@ -459,7 +460,7 @@ class LiveAdminSyncTest(TestCase):
     def test_explicit_session_ids_are_forwarded(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
 
-        synced_sessions = sync_live_admin_membership(self.mu, session_ids=[17, 18])
+        synced_sessions = self.control_client.sync_live_admin_membership(self.mu, session_ids=[17, 18])
 
         self.assertEqual(synced_sessions, 2)
         _, payload = mock_post_json.call_args.args
@@ -468,16 +469,16 @@ class LiveAdminSyncTest(TestCase):
     @patch('fg.pilot.control._post_json')
     def test_invalid_session_id_raises(self, mock_post_json):
         with self.assertRaises(MumbleSyncError):
-            sync_live_admin_membership(self.mu, session_ids=['bad'])
+            self.control_client.sync_live_admin_membership(self.mu, session_ids=['bad'])
         mock_post_json.assert_not_called()
 
-    @patch('fg.pilot.control.probe_mumble_registration')
+    @patch('fg.pilot.control.BgControlClient.probe_mumble_registration')
     @patch('fg.pilot.control._post_json')
     def test_probe_fallback_used_when_sync_count_missing(self, mock_post_json, mock_probe):
         mock_post_json.return_value = {'status': 'completed'}
         mock_probe.return_value = {'active_session_count': 4}
 
-        synced_sessions = sync_live_admin_membership(self.mu)
+        synced_sessions = self.control_client.sync_live_admin_membership(self.mu)
 
         self.assertEqual(synced_sessions, 4)
 

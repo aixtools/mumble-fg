@@ -12,16 +12,11 @@ from django.views.decorators.http import require_POST
 from accounts.models import EveCharacter, GroupMembership
 from modules.corporation.core import _user_is_alliance_leader
 from modules.corporation.models import CorporationSettings
-from .pilot.control import (
-    MumbleSyncError,
-    reset_mumble_password,
-    sync_live_admin_membership,
-    sync_mumble_registration,
-    unregister_mumble_registration,
-)
+from .pilot.control import BgControlClient, MumbleSyncError
 from .pilot.models import MumbleServer, MumbleSession, MumbleUser
 
 logger = logging.getLogger(__name__)
+_CONTROL_CLIENT = BgControlClient()
 
 _FORBIDDEN_PASSWORD_CHARS = {"'", '"', '`', '\\'}
 _PASSWORD_ALPHABET = ''.join(
@@ -43,7 +38,7 @@ def _password_has_supported_chars(password):
 
 
 def _sync_remote_registration(mumble_user, password=None):
-    return sync_mumble_registration(
+    return _CONTROL_CLIENT.sync_mumble_registration(
         mumble_user,
         password=password,
         requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
@@ -51,21 +46,21 @@ def _sync_remote_registration(mumble_user, password=None):
 
 
 def _unregister_remote_registration(mumble_user):
-    return unregister_mumble_registration(
+    return _CONTROL_CLIENT.unregister_mumble_registration(
         mumble_user,
         requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
     )
 
 
 def _sync_live_admin_membership(mumble_user):
-    return sync_live_admin_membership(
+    return _CONTROL_CLIENT.sync_live_admin_membership(
         mumble_user,
         requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
     )
 
 
 def _sync_password(mumble_user, password=None):
-    return reset_mumble_password(
+    return _CONTROL_CLIENT.reset_mumble_password(
         mumble_user,
         password=password,
         requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
