@@ -424,20 +424,9 @@ class LiveAdminSyncTest(TestCase):
             pwhash='h',
             is_mumble_admin=True,
         )
-        observed_at = timezone.now()
-        for session_id in (17, 18):
-            MumbleSession.objects.create(
-                server=self.server,
-                mumble_user=self.mu,
-                session_id=session_id,
-                username='Pulse_User',
-                connected_at=observed_at,
-                last_seen=observed_at,
-                last_state=observed_at,
-            )
 
     @patch('fg.pilot.control._post_json')
-    def test_grant_updates_all_active_sessions(self, mock_post_json):
+    def test_grant_posts_contract_payload(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
 
         synced_sessions = sync_live_admin_membership(self.mu)
@@ -448,10 +437,11 @@ class LiveAdminSyncTest(TestCase):
         self.assertEqual(path, '/v1/admin-membership/sync')
         self.assertTrue(payload['admin'])
         self.assertEqual(payload['server_name'], self.server.name)
-        self.assertEqual(set(payload['session_ids']), {17, 18})
+        self.assertEqual(payload['pkid'], self.mu.user_id)
+        self.assertNotIn('session_ids', payload)
 
     @patch('fg.pilot.control._post_json')
-    def test_revoke_updates_all_active_sessions(self, mock_post_json):
+    def test_revoke_posts_contract_payload(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
         self.mu.is_mumble_admin = False
 
@@ -461,15 +451,33 @@ class LiveAdminSyncTest(TestCase):
         path, payload = mock_post_json.call_args.args
         self.assertEqual(path, '/v1/admin-membership/sync')
         self.assertFalse(payload['admin'])
-        self.assertEqual(set(payload['session_ids']), {17, 18})
+        self.assertNotIn('session_ids', payload)
 
     @patch('fg.pilot.control._post_json')
-    def test_no_active_sessions_skips_control(self, mock_post_json):
-        MumbleSession.objects.filter(mumble_user=self.mu).update(is_active=False)
+    def test_explicit_session_ids_are_forwarded(self, mock_post_json):
+        mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
+
+        synced_sessions = sync_live_admin_membership(self.mu, session_ids=[17, 18])
+
+        self.assertEqual(synced_sessions, 2)
+        _, payload = mock_post_json.call_args.args
+        self.assertEqual(payload['session_ids'], [17, 18])
+
+    @patch('fg.pilot.control._post_json')
+    def test_invalid_session_id_raises(self, mock_post_json):
+        with self.assertRaises(MumbleSyncError):
+            sync_live_admin_membership(self.mu, session_ids=['bad'])
+        mock_post_json.assert_not_called()
+
+    @patch('fg.pilot.control.probe_mumble_registration')
+    @patch('fg.pilot.control._post_json')
+    def test_probe_fallback_used_when_sync_count_missing(self, mock_post_json, mock_probe):
+        mock_post_json.return_value = {'status': 'completed'}
+        mock_probe.return_value = {'active_session_count': 4}
 
         synced_sessions = sync_live_admin_membership(self.mu)
-        self.assertEqual(synced_sessions, 0)
-        mock_post_json.assert_not_called()
+
+        self.assertEqual(synced_sessions, 4)
 
 
 # ── Views ───────────────────────────────────────────────────────────

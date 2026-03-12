@@ -15,8 +15,6 @@ from urllib.request import Request, urlopen
 from django.conf import settings
 from django.utils.timezone import now
 
-from fg.pilot.models import MumbleSession
-
 REQUEST_TIMEOUT_SECONDS = 5
 CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:8000'
 
@@ -209,31 +207,65 @@ def unregister_mumble_registration(mumble_user, *, requested_by: str | None = No
     return False
 
 
-def sync_live_admin_membership(mumble_user, *, requested_by: str | None = None) -> int:
-    session_ids: Iterable[int] = list(
-        MumbleSession.objects.filter(
-            server=mumble_user.server,
-            mumble_user=mumble_user,
-            is_active=True,
-        ).order_by('session_id').values_list('session_id', flat=True)
-    )
-    if not session_ids:
-        return 0
+def probe_mumble_registration(mumble_user) -> dict[str, Any] | None:
+    response = _get_json(f'/v1/pilots/{mumble_user.user_id}', allow_not_found=True)
+    if str(response.get('status', '')).lower() == 'not_found':
+        return None
+
+    registrations = response.get('registrations')
+    if not isinstance(registrations, list):
+        raise MumbleSyncError('Probe response did not include registrations')
+
+    for registration in registrations:
+        if not isinstance(registration, dict):
+            continue
+        if registration.get('server_name') == mumble_user.server.name:
+            return registration
+    return None
+
+
+def _normalize_session_ids(session_ids: Iterable[int]) -> list[int]:
+    normalized: list[int] = []
+    for value in session_ids:
+        try:
+            session_id = int(value)
+        except (TypeError, ValueError):
+            raise MumbleSyncError(f'Invalid session_id in payload: {value!r}') from None
+        if session_id > 0:
+            normalized.append(session_id)
+    return normalized
+
+
+def sync_live_admin_membership(
+    mumble_user,
+    *,
+    requested_by: str | None = None,
+    session_ids: Iterable[int] | None = None,
+) -> int:
+    payload = {
+        'pkid': mumble_user.user_id,
+        'server_name': mumble_user.server.name,
+        'admin': bool(mumble_user.is_mumble_admin),
+    }
+    if session_ids is not None:
+        payload['session_ids'] = _normalize_session_ids(session_ids)
 
     response = _post_json(
         '/v1/admin-membership/sync',
-        {
-            'pkid': mumble_user.user_id,
-            'server_name': mumble_user.server.name,
-            'admin': bool(mumble_user.is_mumble_admin),
-            'session_ids': list(session_ids),
-        },
+        payload,
         requested_by=requested_by,
     )
     synced_sessions = response.get('synced_sessions')
     if isinstance(synced_sessions, int):
         return synced_sessions
-    return len(session_ids)
+
+    registration = probe_mumble_registration(mumble_user)
+    if not registration:
+        return 0
+    active_session_count = registration.get('active_session_count')
+    if isinstance(active_session_count, int):
+        return active_session_count
+    return 0
 
 
 def reset_mumble_password(
@@ -259,6 +291,7 @@ def reset_mumble_password(
 __all__ = [
     'MumbleSyncError',
     '_post_json',
+    'probe_mumble_registration',
     'reset_mumble_password',
     'sync_live_admin_membership',
     'sync_mumble_registration',
