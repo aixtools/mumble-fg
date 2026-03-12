@@ -39,15 +39,25 @@ def _apply_password_record(mumble_user, password):
 
 
 def _sync_remote_registration(mumble_user, password=None):
-    return sync_mumble_registration(mumble_user, password=password)
+    return sync_mumble_registration(
+        mumble_user,
+        password=password,
+        requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
+    )
 
 
 def _unregister_remote_registration(mumble_user):
-    return unregister_mumble_registration(mumble_user)
+    return unregister_mumble_registration(
+        mumble_user,
+        requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
+    )
 
 
 def _sync_live_admin_membership(mumble_user):
-    return sync_live_admin_membership(mumble_user)
+    return sync_live_admin_membership(
+        mumble_user,
+        requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
+    )
 
 
 def _has_alliance_leader_membership(user):

@@ -1,5 +1,5 @@
 from datetime import timedelta
-from unittest.mock import Mock, call, patch
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Permission
@@ -398,45 +398,41 @@ class LiveAdminSyncTest(TestCase):
                 last_state=observed_at,
             )
 
-    @patch('fg.pilot.control._open_target_server')
-    def test_grant_updates_all_active_sessions(self, mock_open_target_server):
-        communicator = Mock()
-        server_proxy = Mock()
-        mock_open_target_server.return_value = (communicator, None, server_proxy)
+    @patch('fg.pilot.control._post_json')
+    def test_grant_updates_all_active_sessions(self, mock_post_json):
+        mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
 
         synced_sessions = sync_live_admin_membership(self.mu)
 
         self.assertEqual(synced_sessions, 2)
-        server_proxy.addUserToGroup.assert_has_calls(
-            [call(0, 17, 'admin'), call(0, 18, 'admin')]
-        )
-        server_proxy.removeUserFromGroup.assert_not_called()
-        communicator.destroy.assert_called_once()
+        mock_post_json.assert_called_once()
+        path, payload = mock_post_json.call_args.args
+        self.assertEqual(path, '/v1/admin-membership/sync')
+        self.assertTrue(payload['admin'])
+        self.assertEqual(payload['server_name'], self.server.name)
+        self.assertEqual(set(payload['session_ids']), {17, 18})
 
-    @patch('fg.pilot.control._open_target_server')
-    def test_revoke_updates_all_active_sessions(self, mock_open_target_server):
-        communicator = Mock()
-        server_proxy = Mock()
-        mock_open_target_server.return_value = (communicator, None, server_proxy)
+    @patch('fg.pilot.control._post_json')
+    def test_revoke_updates_all_active_sessions(self, mock_post_json):
+        mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
         self.mu.is_mumble_admin = False
 
         synced_sessions = sync_live_admin_membership(self.mu)
 
         self.assertEqual(synced_sessions, 2)
-        server_proxy.removeUserFromGroup.assert_has_calls(
-            [call(0, 17, 'admin'), call(0, 18, 'admin')]
-        )
-        server_proxy.addUserToGroup.assert_not_called()
-        communicator.destroy.assert_called_once()
+        path, payload = mock_post_json.call_args.args
+        self.assertEqual(path, '/v1/admin-membership/sync')
+        self.assertFalse(payload['admin'])
+        self.assertEqual(set(payload['session_ids']), {17, 18})
 
-    @patch('fg.pilot.control._open_target_server')
-    def test_no_active_sessions_skips_ice(self, mock_open_target_server):
+    @patch('fg.pilot.control._post_json')
+    def test_no_active_sessions_skips_control(self, mock_post_json):
         MumbleSession.objects.filter(mumble_user=self.mu).update(is_active=False)
 
         synced_sessions = sync_live_admin_membership(self.mu)
 
         self.assertEqual(synced_sessions, 0)
-        mock_open_target_server.assert_not_called()
+        mock_post_json.assert_not_called()
 
 
 # ── Views ───────────────────────────────────────────────────────────
