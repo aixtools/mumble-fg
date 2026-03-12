@@ -36,6 +36,23 @@
 
 Plan for execution order: implement `BG-201`/`BG-202`/`BG-203`/`BG-204` on `bg-models` first, then apply `FG-101`/`FG-102`/`FG-103`/`FG-105` on `fg-models`, then run `FG-110`, then validate `FG-104` and stage the later items.
 
+## Standalone Validation Rule
+
+Do not start Cube/AllianceAuth wiring until standalone fg/bg validation is
+green.
+
+Required pre-integration checks:
+
+1. run bg as a standalone HTTP service (for example `127.0.0.1:18080`)
+2. verify `GET /v1/health`, `GET /v1/control-key/status`, and `GET /v1/servers`
+   succeed with expected auth behavior
+3. point fg control base URL at standalone bg
+4. run fg mutating paths (password reset, registration/admin actions) and verify
+   results only via bg probes
+
+Only after these pass should host URL mount, sidebar/profile panel integration,
+and host permission wiring begin.
+
 ## One-Page Run Order
 
 1. `git checkout bg-models`  
