@@ -1,6 +1,5 @@
 import logging
 import secrets
-import string
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -24,10 +23,23 @@ from .pilot.models import MumbleServer, MumbleSession, MumbleUser
 
 logger = logging.getLogger(__name__)
 
+_FORBIDDEN_PASSWORD_CHARS = {"'", '"', '`', '\\'}
+_PASSWORD_ALPHABET = ''.join(
+    chr(code) for code in range(33, 127) if chr(code) not in _FORBIDDEN_PASSWORD_CHARS
+)
+
 
 def _generate_password(length=16):
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
+    return ''.join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+
+
+def _password_has_supported_chars(password):
+    for ch in password:
+        if ord(ch) < 33 or ord(ch) > 126:
+            return False
+        if ch in _FORBIDDEN_PASSWORD_CHARS:
+            return False
+    return True
 
 
 def _sync_remote_registration(mumble_user, password=None):
@@ -233,6 +245,9 @@ def set_password(request, server_id):
     password = request.POST.get('mumble_password', '')
     if len(password) < 8:
         messages.error(request, _('Password must be at least 8 characters.'))
+        return redirect('profile')
+    if not _password_has_supported_chars(password):
+        messages.error(request, _("Password may not contain any of: ' \" ` \\"))
         return redirect('profile')
 
     try:

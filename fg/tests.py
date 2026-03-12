@@ -19,6 +19,7 @@ from modules.corporation.models import CorporationSettings
 from fg.pilot.control import MumbleSyncError, sync_live_admin_membership
 from fg.pilot.models import MumbleServer, MumbleSession, MumbleUser
 from fg.views import (
+    _PASSWORD_ALPHABET,
     _generate_password,
     _get_mumble_username,
     _compute_display_name,
@@ -88,9 +89,9 @@ class GeneratePasswordTest(TestCase):
         pw = _generate_password(length=32)
         self.assertEqual(len(pw), 32)
 
-    def test_alphanumeric_only(self):
+    def test_supported_ascii_charset_only(self):
         pw = _generate_password(length=200)
-        self.assertTrue(pw.isalnum())
+        self.assertTrue(all(ch in _PASSWORD_ALPHABET for ch in pw))
 
     def test_unique(self):
         passwords = {_generate_password() for _ in range(50)}
@@ -553,6 +554,16 @@ class SetPasswordViewTest(TestCase):
         )
         self.mu.refresh_from_db()
         self.assertEqual(self.mu.pwhash, 'oldhash')
+
+    def test_set_restricted_characters_rejected(self):
+        self.client.post(
+            reverse('mumble:set_password', args=[self.server.pk]),
+            {'mumble_password': 'bad\\pass1'},
+            follow=True,
+        )
+        self.mu.refresh_from_db()
+        self.assertEqual(self.mu.pwhash, 'oldhash')
+        self.assertIsNone(self.mu.mumble_userid)
 
     def test_set_password_no_account(self):
         self.mu.delete()
