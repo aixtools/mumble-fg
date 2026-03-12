@@ -186,54 +186,157 @@ def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[
     return payload
 
 
-def sync_mumble_registration(mumble_user, password=None, *, requested_by: str | None = None) -> int | None:
-    response = _post_json('/v1/registrations/sync', _sync_endpoint_payload(mumble_user, password=password), requested_by=requested_by)
-    return _extract_mumble_userid(response)
+class BgControlClient:
+    """OO adapter for FG -> BG control and probe endpoints."""
+
+    def sync_mumble_registration(
+        self,
+        mumble_user,
+        password: str | None = None,
+        *,
+        requested_by: str | None = None,
+    ) -> int | None:
+        response = _post_json(
+            '/v1/registrations/sync',
+            _sync_endpoint_payload(mumble_user, password=password),
+            requested_by=requested_by,
+        )
+        return _extract_mumble_userid(response)
+
+    def unregister_mumble_registration(
+        self,
+        mumble_user,
+        *,
+        requested_by: str | None = None,
+    ) -> bool:
+        response = _post_json(
+            '/v1/registrations/disable',
+            {
+                'pkid': mumble_user.user_id,
+                'server_name': mumble_user.server.name,
+                'username': mumble_user.username,
+                'mumble_userid': mumble_user.mumble_userid,
+            },
+            requested_by=requested_by,
+        )
+        disabled = response.get('disabled')
+        if isinstance(disabled, bool):
+            return disabled
+        status = response.get('status')
+        if status in {'accepted', 'completed'}:
+            return True
+        return False
+
+    def probe_mumble_registration(self, mumble_user) -> dict[str, Any] | None:
+        response = _get_json(f'/v1/pilots/{mumble_user.user_id}', allow_not_found=True)
+        if str(response.get('status', '')).lower() == 'not_found':
+            return None
+
+        registrations = response.get('registrations')
+        if not isinstance(registrations, list):
+            raise MumbleSyncError('Probe response did not include registrations')
+
+        for registration in registrations:
+            if not isinstance(registration, dict):
+                continue
+            if registration.get('server_name') == mumble_user.server.name:
+                return registration
+        return None
+
+    @staticmethod
+    def _normalize_session_ids(session_ids: Iterable[int]) -> list[int]:
+        normalized: list[int] = []
+        for value in session_ids:
+            try:
+                session_id = int(value)
+            except (TypeError, ValueError):
+                raise MumbleSyncError(f'Invalid session_id in payload: {value!r}') from None
+            if session_id > 0:
+                normalized.append(session_id)
+        return normalized
+
+    def sync_live_admin_membership(
+        self,
+        mumble_user,
+        *,
+        requested_by: str | None = None,
+        session_ids: Iterable[int] | None = None,
+    ) -> int:
+        payload = {
+            'pkid': mumble_user.user_id,
+            'server_name': mumble_user.server.name,
+            'admin': bool(mumble_user.is_mumble_admin),
+        }
+        if session_ids is not None:
+            payload['session_ids'] = self._normalize_session_ids(session_ids)
+
+        response = _post_json(
+            '/v1/admin-membership/sync',
+            payload,
+            requested_by=requested_by,
+        )
+        synced_sessions = response.get('synced_sessions')
+        if isinstance(synced_sessions, int):
+            return synced_sessions
+
+        registration = self.probe_mumble_registration(mumble_user)
+        if not registration:
+            return 0
+        active_session_count = registration.get('active_session_count')
+        if isinstance(active_session_count, int):
+            return active_session_count
+        return 0
+
+    def reset_mumble_password(
+        self,
+        mumble_user,
+        password: str | None = None,
+        *,
+        requested_by: str | None = None,
+    ) -> tuple[str, int | None]:
+        payload = {
+            'pkid': mumble_user.user_id,
+            'server_name': mumble_user.server.name,
+            'username': mumble_user.username,
+        }
+        if password is not None:
+            payload['password'] = password
+        response = _post_json('/v1/password-reset', payload, requested_by=requested_by)
+        resolved_password = _extract_password(response)
+        if resolved_password is None:
+            raise MumbleSyncError('Control response did not include password')
+        return resolved_password, _extract_mumble_userid(response)
+
+
+_CONTROL_CLIENT = BgControlClient()
+
+
+def control_client() -> BgControlClient:
+    return _CONTROL_CLIENT
+
+
+def sync_mumble_registration(
+    mumble_user,
+    password=None,
+    *,
+    requested_by: str | None = None,
+) -> int | None:
+    return control_client().sync_mumble_registration(
+        mumble_user,
+        password=password,
+        requested_by=requested_by,
+    )
 
 
 def unregister_mumble_registration(mumble_user, *, requested_by: str | None = None) -> bool:
-    response = _post_json('/v1/registrations/disable', {
-        'pkid': mumble_user.user_id,
-        'server_name': mumble_user.server.name,
-        'username': mumble_user.username,
-        'mumble_userid': mumble_user.mumble_userid,
-    }, requested_by=requested_by)
-    disabled = response.get('disabled')
-    if isinstance(disabled, bool):
-        return disabled
-    status = response.get('status')
-    if status in {'accepted', 'completed'}:
-        return True
-    return False
+    return control_client().unregister_mumble_registration(
+        mumble_user,
+        requested_by=requested_by,
+    )
 
 
 def probe_mumble_registration(mumble_user) -> dict[str, Any] | None:
-    response = _get_json(f'/v1/pilots/{mumble_user.user_id}', allow_not_found=True)
-    if str(response.get('status', '')).lower() == 'not_found':
-        return None
-
-    registrations = response.get('registrations')
-    if not isinstance(registrations, list):
-        raise MumbleSyncError('Probe response did not include registrations')
-
-    for registration in registrations:
-        if not isinstance(registration, dict):
-            continue
-        if registration.get('server_name') == mumble_user.server.name:
-            return registration
-    return None
-
-
-def _normalize_session_ids(session_ids: Iterable[int]) -> list[int]:
-    normalized: list[int] = []
-    for value in session_ids:
-        try:
-            session_id = int(value)
-        except (TypeError, ValueError):
-            raise MumbleSyncError(f'Invalid session_id in payload: {value!r}') from None
-        if session_id > 0:
-            normalized.append(session_id)
-    return normalized
+    return control_client().probe_mumble_registration(mumble_user)
 
 
 def sync_live_admin_membership(
@@ -242,30 +345,11 @@ def sync_live_admin_membership(
     requested_by: str | None = None,
     session_ids: Iterable[int] | None = None,
 ) -> int:
-    payload = {
-        'pkid': mumble_user.user_id,
-        'server_name': mumble_user.server.name,
-        'admin': bool(mumble_user.is_mumble_admin),
-    }
-    if session_ids is not None:
-        payload['session_ids'] = _normalize_session_ids(session_ids)
-
-    response = _post_json(
-        '/v1/admin-membership/sync',
-        payload,
+    return control_client().sync_live_admin_membership(
+        mumble_user,
         requested_by=requested_by,
+        session_ids=session_ids,
     )
-    synced_sessions = response.get('synced_sessions')
-    if isinstance(synced_sessions, int):
-        return synced_sessions
-
-    registration = probe_mumble_registration(mumble_user)
-    if not registration:
-        return 0
-    active_session_count = registration.get('active_session_count')
-    if isinstance(active_session_count, int):
-        return active_session_count
-    return 0
 
 
 def reset_mumble_password(
@@ -274,23 +358,18 @@ def reset_mumble_password(
     *,
     requested_by: str | None = None,
 ) -> tuple[str, int | None]:
-    payload = {
-        'pkid': mumble_user.user_id,
-        'server_name': mumble_user.server.name,
-        'username': mumble_user.username,
-    }
-    if password is not None:
-        payload['password'] = password
-    response = _post_json('/v1/password-reset', payload, requested_by=requested_by)
-    resolved_password = _extract_password(response)
-    if resolved_password is None:
-        raise MumbleSyncError('Control response did not include password')
-    return resolved_password, _extract_mumble_userid(response)
+    return control_client().reset_mumble_password(
+        mumble_user,
+        password=password,
+        requested_by=requested_by,
+    )
 
 
 __all__ = [
     'MumbleSyncError',
+    'BgControlClient',
     '_post_json',
+    'control_client',
     'probe_mumble_registration',
     'reset_mumble_password',
     'sync_live_admin_membership',

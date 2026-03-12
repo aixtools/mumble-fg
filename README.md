@@ -21,8 +21,11 @@ Current extracted paths:
 - `fg/tests.py`
 - `fg/passwords.py`
 - `fg/pilot/`
+- `fg/integration.py`
+- `fg/panels/`
 - `fg/management/commands/backfill_mumble_display_names.py`
 - `templates/fg/manage.html`
+- `templates/fg/panels/profile_panel.html`
 
 This split is intentionally incomplete. The Django code here still expects broader host-application context, including:
 

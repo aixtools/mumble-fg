@@ -5,7 +5,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -16,6 +16,8 @@ from fg.passwords import (
     build_murmur_password_record,
     verify_murmur_password,
 )
+from fg.panels import build_profile_panels, get_profile_panel_provider
+from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
 from fg.pilot.control import MumbleSyncError, _post_json, sync_live_admin_membership
 from fg.pilot.models import MumbleServer, MumbleSession, MumbleUser
@@ -880,6 +882,63 @@ class TasksTest(TestCase):
         update_mumble_groups(self.mu.pk)
         self.mu.refresh_from_db()
         self.assertEqual(self.mu.groups, '')
+
+
+class ProfilePanelProviderTest(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = _make_member('paneluser')
+        self.server1 = _make_server(name='Server 1', address='s1.example.com:64738')
+        self.server2 = _make_server(name='Server 2', address='s2.example.com:64738')
+
+    def _request(self):
+        request = self.factory.get('/profile/')
+        request.user = self.user
+        request.session = {}
+        return request
+
+    def test_generic_provider_builds_server_panels(self):
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        self.assertEqual(len(panels), 2)
+        self.assertEqual({panel['server'].pk for panel in panels}, {self.server1.pk, self.server2.pk})
+        self.assertEqual({panel['template'] for panel in panels}, {'fg/panels/profile_panel.html'})
+
+    def test_duplicate_username_gets_slot_suffix(self):
+        MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')
+        MumbleUser.objects.create(user=self.user, server=self.server2, username='Pilot_Name', pwhash='h')
+        request = self._request()
+
+        panels = build_profile_panels(request)
+        usernames = sorted(panel['username_with_slot'] for panel in panels if panel['username_with_slot'])
+
+        self.assertEqual(usernames, ['Pilot_Name:1', 'Pilot_Name:2'])
+
+    def test_temp_password_is_read_once(self):
+        MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')
+        request = self._request()
+        request.session[f'mumble_temp_password_{self.server1.pk}'] = 'abc123'
+
+        panels1 = build_profile_panels(request)
+        panels2 = build_profile_panels(request)
+
+        first = next(panel for panel in panels1 if panel['server'].pk == self.server1.pk)
+        second = next(panel for panel in panels2 if panel['server'].pk == self.server1.pk)
+        self.assertEqual(first['temp_password'], 'abc123')
+        self.assertIsNone(second['temp_password'])
+
+    @override_settings(MUMBLE_PANEL_HOST='cube')
+    def test_host_provider_resolution(self):
+        provider = get_profile_panel_provider()
+        self.assertEqual(provider.provider_name, 'cube')
+
+    def test_cube_integration_uses_cube_provider(self):
+        integration = CubeMurmurIntegration()
+        request = self._request()
+        panels = integration.get_profile_panels(request)
+        self.assertEqual(len(panels), 2)
 
 
 # ── Profile integration ────────────────────────────────────────────
