@@ -1,0 +1,120 @@
+name: Deploy mumble-fg (Dev)
+
+on:
+  push:
+    branches:
+      - main
+      - fg-mvp
+  workflow_dispatch:
+    inputs:
+      deploy_target_name:
+        description: 'Secret name containing deploy target JSON (host/user/key)'
+        required: false
+        default: 'CUBE_DEV_CUBE'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_TARGET_NAME: ${{ github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve deploy target
+        env:
+          DEPLOY_TARGET_JSON: ${{ secrets[github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE'] }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          target_name = os.environ.get("DEPLOY_TARGET_NAME", "").strip()
+          raw = os.environ.get("DEPLOY_TARGET_JSON", "").strip()
+          if not target_name:
+              raise SystemExit("DEPLOY_TARGET_NAME is empty")
+          if not raw:
+              raise SystemExit(
+                  f"Missing deploy target secret payload for {target_name}. "
+                  f"Create a secret named {target_name} with JSON fields host/user/key."
+              )
+
+          payload = json.loads(raw)
+          if not isinstance(payload, dict):
+              raise SystemExit(f"Secret {target_name} must be a JSON object")
+
+          host = str(payload.get("host", "")).strip()
+          user = str(payload.get("user", "")).strip()
+          key = payload.get("key", "")
+
+          if not host:
+              raise SystemExit(f"Secret {target_name} missing required field: host")
+          if not user:
+              raise SystemExit(f"Secret {target_name} missing required field: user")
+          if not isinstance(key, str) or not key.strip():
+              raise SystemExit(f"Secret {target_name} missing required field: key")
+
+          key_path = Path.home() / ".ssh" / "deploy_key"
+          key_path.write_text(key.replace("\\n", "\n").rstrip() + "\n", encoding="utf-8")
+          key_path.chmod(0o600)
+
+          github_env = Path(os.environ["GITHUB_ENV"])
+          with github_env.open("a", encoding="utf-8") as fh:
+              fh.write(f"DEPLOY_TARGET_HOST={host}\n")
+              fh.write(f"DEPLOY_TARGET_USER={user}\n")
+          PY
+
+      - name: Set up SSH known hosts
+        run: |
+          set -euo pipefail
+          ssh-keyscan -H "${DEPLOY_TARGET_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Deploy code via rsync
+        run: |
+          set -euo pipefail
+          rsync -avz --delete \
+            --exclude '.git/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude '.pytest_cache/' \
+            --exclude '.env' \
+            --exclude '.venv/' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}:/home/cube/mumble-fg/"
+
+      - name: Restart host services (best effort)
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" << 'EOF'
+          set -euo pipefail
+
+          if ! sudo -n true >/dev/null 2>&1; then
+            echo "No passwordless sudo available; skipping service restarts."
+            exit 0
+          fi
+
+          restart_if_present() {
+            local unit="$1"
+            if sudo -n systemctl list-unit-files "${unit}" >/dev/null 2>&1; then
+              echo "Restarting ${unit}"
+              sudo -n systemctl restart "${unit}" || true
+            else
+              echo "Unit not present: ${unit}"
+            fi
+          }
+
+          restart_if_present cube-django.service
+          restart_if_present cube-celery.service
+          restart_if_present cube-celery-beat.service
+          EOF
+
+      - name: Deploy path sanity check
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "test -f /home/cube/mumble-fg/fg/views.py && test -f /home/cube/mumble-fg/templates/fg/panels/profile_panel.html"
