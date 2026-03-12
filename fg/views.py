@@ -14,7 +14,7 @@ from accounts.models import EveCharacter, GroupMembership
 from modules.corporation.core import _user_is_alliance_leader
 from modules.corporation.models import CorporationSettings
 from .passwords import build_murmur_password_record
-from .pilot.ice_sync import (
+from .pilot.control import (
     MumbleSyncError,
     sync_live_admin_membership,
     sync_mumble_registration,

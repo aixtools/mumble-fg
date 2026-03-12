@@ -30,7 +30,7 @@ This split is intentionally incomplete. The Django code here still expects broad
 - `modules.corporation`
 - `modules.esi_queue`
 - pilot-side Mumble models exposed through `fg.pilot.models`
-- pilot-side sync helpers exposed through `fg.pilot.ice_sync`
+- pilot-side sync helpers exposed through `fg.pilot.control`
 
 Those seams should be redesigned explicitly rather than left shared implicitly.
 

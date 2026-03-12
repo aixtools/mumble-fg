@@ -16,7 +16,7 @@ from fg.passwords import (
     verify_murmur_password,
 )
 from modules.corporation.models import CorporationSettings
-from fg.pilot.ice_sync import MumbleSyncError, sync_live_admin_membership
+from fg.pilot.control import MumbleSyncError, sync_live_admin_membership
 from fg.pilot.models import MumbleServer, MumbleSession, MumbleUser
 from fg.views import (
     _generate_password,
@@ -398,7 +398,7 @@ class LiveAdminSyncTest(TestCase):
                 last_state=observed_at,
             )
 
-    @patch('fg.pilot.ice_sync._open_target_server')
+    @patch('fg.pilot.control._open_target_server')
     def test_grant_updates_all_active_sessions(self, mock_open_target_server):
         communicator = Mock()
         server_proxy = Mock()
@@ -413,7 +413,7 @@ class LiveAdminSyncTest(TestCase):
         server_proxy.removeUserFromGroup.assert_not_called()
         communicator.destroy.assert_called_once()
 
-    @patch('fg.pilot.ice_sync._open_target_server')
+    @patch('fg.pilot.control._open_target_server')
     def test_revoke_updates_all_active_sessions(self, mock_open_target_server):
         communicator = Mock()
         server_proxy = Mock()
@@ -429,7 +429,7 @@ class LiveAdminSyncTest(TestCase):
         server_proxy.addUserToGroup.assert_not_called()
         communicator.destroy.assert_called_once()
 
-    @patch('fg.pilot.ice_sync._open_target_server')
+    @patch('fg.pilot.control._open_target_server')
     def test_no_active_sessions_skips_ice(self, mock_open_target_server):
         MumbleSession.objects.filter(mumble_user=self.mu).update(is_active=False)
 
