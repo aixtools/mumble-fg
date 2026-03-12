@@ -108,7 +108,7 @@ def _extract_password(response: dict[str, Any]) -> str | None:
                 return value
     status = response.get('status')
     if isinstance(status, dict):
-        for key in ('password', 'proposed_password', 'temporary_password'):
+        for key in ('password', 'proposed_password', 'temporary_password', 'recommended_password'):
             value = status.get(key)
             if isinstance(value, str) and value:
                 return value
