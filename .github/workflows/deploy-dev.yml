@@ -1,0 +1,180 @@
+name: Deploy mumble-fg (Dev)
+
+on:
+  push:
+    branches:
+      - main
+      - fg-mvp
+  workflow_dispatch:
+    inputs:
+      deploy_target_name:
+        description: 'Secret name containing deploy target JSON'
+        required: false
+        default: 'CUBE_DEV_CUBE'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_TARGET_NAME: ${{ github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve deploy target
+        env:
+          DEPLOY_TARGET_JSON: ${{ secrets[github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE'] }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+
+          python3 - <<'PY'
+          import json
+          import os
+          from json import JSONDecodeError
+          from pathlib import Path
+
+          def _parse_target_payload(raw: str, target_name: str) -> dict:
+              try:
+                  payload = json.loads(raw)
+              except JSONDecodeError:
+                  # Common operator input mistake: literal newlines in "key" JSON string.
+                  key_field = '"key"'
+                  key_index = raw.find(key_field)
+                  if key_index < 0:
+                      raise
+                  colon_index = raw.find(':', key_index + len(key_field))
+                  if colon_index < 0:
+                      raise
+                  quote_start = raw.find('"', colon_index + 1)
+                  if quote_start < 0:
+                      raise
+
+                  i = quote_start + 1
+                  while i < len(raw):
+                      if raw[i] == '"' and raw[i - 1] != '\\':
+                          break
+                      i += 1
+                  if i >= len(raw):
+                      raise
+
+                  key_raw = raw[quote_start + 1:i]
+                  key_escaped = (
+                      key_raw
+                      .replace('\\', '\\\\')
+                      .replace('\r', '\\r')
+                      .replace('\n', '\\n')
+                      .replace('\t', '\\t')
+                  )
+                  repaired = raw[:quote_start + 1] + key_escaped + raw[i:]
+                  payload = json.loads(repaired)
+
+              if not isinstance(payload, dict):
+                  raise SystemExit(f"Secret {target_name} must be a JSON object")
+              return payload
+
+          target_name = os.environ.get("DEPLOY_TARGET_NAME", "").strip()
+          raw = os.environ.get("DEPLOY_TARGET_JSON", "").strip()
+          if not target_name:
+              raise SystemExit("DEPLOY_TARGET_NAME is empty")
+          if not raw:
+              raise SystemExit(
+                  f"Missing deploy target secret payload for {target_name}. "
+                  f"Create a secret named {target_name} with JSON fields host/user/key."
+              )
+
+          payload = _parse_target_payload(raw, target_name)
+
+          host = str(payload.get("host", "")).strip()
+          user = str(payload.get("user", "")).strip()
+          key = payload.get("key", "")
+          home_dir = str(payload.get("home_dir", "")).strip()
+          project_dir = str(payload.get("project_dir", "")).strip()
+          service_units = payload.get("service_units", [])
+
+          if not host:
+              raise SystemExit(f"Secret {target_name} missing required field: host")
+          if not user:
+              raise SystemExit(f"Secret {target_name} missing required field: user")
+          if not isinstance(key, str) or not key.strip():
+              raise SystemExit(f"Secret {target_name} missing required field: key")
+          if not home_dir:
+              home_dir = f"/home/{user}"
+          if not project_dir:
+              project_dir = f"{home_dir}/mumble-fg"
+          if service_units is None:
+              service_units = []
+          if not isinstance(service_units, list):
+              raise SystemExit(f"Secret {target_name} field service_units must be a JSON list")
+          service_units = [str(unit).strip() for unit in service_units if str(unit).strip()]
+
+          key_path = Path.home() / ".ssh" / "deploy_key"
+          key_path.write_text(key.replace("\\n", "\n").rstrip() + "\n", encoding="utf-8")
+          key_path.chmod(0o600)
+
+          github_env = Path(os.environ["GITHUB_ENV"])
+          with github_env.open("a", encoding="utf-8") as fh:
+              fh.write(f"DEPLOY_TARGET_HOST={host}\n")
+              fh.write(f"DEPLOY_TARGET_USER={user}\n")
+              fh.write(f"DEPLOY_HOME_DIR={home_dir}\n")
+              fh.write(f"DEPLOY_PROJECT_DIR={project_dir}\n")
+              fh.write(f"DEPLOY_SERVICE_UNITS_CSV={','.join(service_units)}\n")
+          PY
+
+      - name: Set up SSH known hosts
+        run: |
+          set -euo pipefail
+          ssh-keyscan -H "${DEPLOY_TARGET_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Deploy code via rsync
+        run: |
+          set -euo pipefail
+          rsync -avz --delete \
+            --exclude '.git/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude '.pytest_cache/' \
+            --exclude '.env' \
+            --exclude '.venv/' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}:${DEPLOY_PROJECT_DIR%/}/"
+
+      - name: Restart host services (best effort)
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_SERVICE_UNITS_CSV:-}" ]; then
+            echo "No service_units configured in deploy target; skipping restarts."
+            exit 0
+          fi
+
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "DEPLOY_SERVICE_UNITS_CSV='${DEPLOY_SERVICE_UNITS_CSV}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          if ! sudo -n true >/dev/null 2>&1; then
+            echo "No passwordless sudo available; skipping service restarts."
+            exit 0
+          fi
+
+          restart_if_present() {
+            local unit="$1"
+            if sudo -n systemctl list-unit-files "${unit}" >/dev/null 2>&1; then
+              echo "Restarting ${unit}"
+              sudo -n systemctl restart "${unit}" || true
+            else
+              echo "Unit not present: ${unit}"
+            fi
+          }
+
+          IFS=',' read -r -a service_units <<< "${DEPLOY_SERVICE_UNITS_CSV}"
+          for service_unit in "${service_units[@]}"; do
+            restart_if_present "${service_unit}"
+          done
+          EOF
+
+      - name: Deploy path sanity check
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "test -f ${DEPLOY_PROJECT_DIR%/}/fg/views.py && test -f ${DEPLOY_PROJECT_DIR%/}/templates/fg/panels/profile_panel.html"

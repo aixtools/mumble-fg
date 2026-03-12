@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .pilot.models import MumbleServer, MumbleSession, MumbleUser
+from .models import MumbleServer, MumbleSession, MumbleUser
 
 
 @admin.register(MumbleServer)

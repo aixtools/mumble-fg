@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 
-from fg.pilot.models import MumbleUser
+from fg.models import MumbleUser
 from fg.views import _compute_display_name
 
 

@@ -50,7 +50,7 @@ Plan for execution order: implement `BG-201`/`BG-202`/`BG-203`/`BG-204` on `bg-m
 
 3. Same branch (`fg-models`)  
    1. Apply `FG-110` only after read/write contract verification is green.  
-   2. Delete legacy `fg/pilot` path and confirm `rg \"fg\\.pilot|modules\\.mumble\\.models|mumble_userid\" fg` returns expected contract names only.
+   2. Delete legacy `fg/pilot` path and confirm `rg \"fg\\.pilot|modules\\.mumble\\.models|murmur_userid\" fg` returns expected contract names only.
 
 4. Same branch (`fg-models`)  
    1. Implement `FG-102` then `FG-103`.  

@@ -1,0 +1,56 @@
+{% load i18n %}
+
+<div class="settings-card full-width">
+    <div class="card-header" style="background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%); border-bottom: 2px solid var(--primary-color);">
+        <h2 class="card-title" style="color: var(--primary-color); text-transform: uppercase; letter-spacing: 1px;" title="{{ panel.server_hint }}">{{ panel.server_label }}</h2>
+    </div>
+    <div class="card-body">
+        {% if panel.temp_password %}
+            <div style="background: #b8860b33; border: 1px solid #b8860b; border-radius: 6px; padding: 0.75rem; margin-bottom: 1rem;">
+                <span class="info-label" style="display: block; margin-bottom: 0.25rem;">{% trans "Your New Password (shown once)" %}</span>
+                <code style="user-select: all; font-size: 1.1rem; color: #ffd700; background: var(--darker-bg); padding: 0.25rem 0.5rem; border-radius: 4px; display: inline-block;">{{ panel.temp_password }}</code>
+            </div>
+        {% endif %}
+
+        {% if panel.account %}
+            <div class="account-info-grid">
+                <div class="info-item">
+                    <span class="info-label">{% trans "Username" %}</span>
+                    <span class="info-value" style="user-select: all;" title="{{ panel.server_hint }}">{{ panel.username_with_slot|default:panel.account.username }}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">{% trans "Server" %}</span>
+                    <span class="info-value" style="user-select: all;">{{ panel.server.address }}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">{% trans "Status" %}</span>
+                    <span class="info-value" style="color: {% if panel.account.is_active %}var(--success-color){% else %}var(--danger-color){% endif %};">
+                        {% if panel.account.is_active %}{% trans "Active" %}{% else %}{% trans "Inactive" %}{% endif %}
+                    </span>
+                </div>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
+                <form method="post" action="{% url 'mumble:reset_password' panel.server.pk %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline btn-xs">{% trans "Reset Password" %}</button>
+                </form>
+                <form method="post" action="{% url 'mumble:deactivate' panel.server.pk %}" style="margin-left: auto;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline btn-xs" style="color: var(--danger-color); border-color: var(--danger-color);" onclick="return confirm('{% trans "Deactivate your Murmur account?" %}');">{% trans "Deactivate" %}</button>
+                </form>
+            </div>
+            <form method="post" action="{% url 'mumble:set_password' panel.server.pk %}" style="margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center;">
+                {% csrf_token %}
+                <input type="password" name="murmur_password" placeholder="{% trans 'Custom password (min 8)' %}" minlength="8" required
+                       style="flex: 1; padding: 0.35rem 0.5rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.85rem;">
+                <button type="submit" class="btn btn-outline btn-xs">{% trans "Set Password" %}</button>
+            </form>
+        {% else %}
+            <p style="color: var(--text-muted); margin-bottom: 1rem;">{% trans "Activate a Murmur account to join fleet voice comms." %}</p>
+            <form method="post" action="{% url 'mumble:activate' panel.server.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary btn-xs">{% trans "Get Murmur Credentials" %}</button>
+            </form>
+        {% endif %}
+    </div>
+</div>

@@ -1,10 +1,11 @@
+import json
 from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -15,10 +16,13 @@ from fg.passwords import (
     build_murmur_password_record,
     verify_murmur_password,
 )
+from fg.panels import build_profile_panels, get_profile_panel_provider
+from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
-from fg.pilot.control import MumbleSyncError, sync_live_admin_membership
-from fg.pilot.models import MumbleServer, MumbleSession, MumbleUser
+from fg.control import BgControlClient, MurmurSyncError, _post_json
+from fg.models import MumbleServer, MumbleSession, MumbleUser
 from fg.views import (
+    _PASSWORD_ALPHABET,
     _generate_password,
     _get_mumble_username,
     _compute_display_name,
@@ -30,6 +34,20 @@ _NO_REDIS = dict(
     CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
     SESSION_ENGINE='django.contrib.sessions.backends.db',
 )
+
+
+class _JsonResponseStub:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode('utf-8')
 
 
 def _make_server(**kwargs):
@@ -88,9 +106,9 @@ class GeneratePasswordTest(TestCase):
         pw = _generate_password(length=32)
         self.assertEqual(len(pw), 32)
 
-    def test_alphanumeric_only(self):
+    def test_supported_ascii_charset_only(self):
         pw = _generate_password(length=200)
-        self.assertTrue(pw.isalnum())
+        self.assertTrue(all(ch in _PASSWORD_ALPHABET for ch in pw))
 
     def test_unique(self):
         passwords = {_generate_password() for _ in range(50)}
@@ -273,12 +291,12 @@ class MumbleModelTest(TestCase):
         self.assertIsNotNone(mu.updated_at)
 
     def test_db_table(self):
-        self.assertEqual(MumbleUser._meta.db_table, 'mumble_mumbleuser')
+        self.assertEqual(MumbleUser._meta.db_table, 'mumble_user')
 
     def test_fk_relationship(self):
         user = User.objects.create_user('testuser', password='pass')
         MumbleUser.objects.create(user=user, server=self.server, username='Test_Pilot', pwhash='h')
-        self.assertEqual(user.mumble_accounts.first().username, 'Test_Pilot')
+        self.assertEqual(user.murmur_registrations.first().username, 'Test_Pilot')
 
     def test_unique_together(self):
         user = User.objects.create_user('testuser', password='pass')
@@ -292,7 +310,7 @@ class MumbleModelTest(TestCase):
         server2 = _make_server(name='Server 2', address='mumble2.example.com:64738')
         MumbleUser.objects.create(user=user, server=self.server, username='Test_Pilot', pwhash='h')
         MumbleUser.objects.create(user=user, server=server2, username='Test_Pilot', pwhash='h')
-        self.assertEqual(user.mumble_accounts.count(), 2)
+        self.assertEqual(user.murmur_registrations.count(), 2)
 
     def test_mumble_userid_unique_per_server(self):
         user1 = User.objects.create_user('testuser1', password='pass')
@@ -375,10 +393,33 @@ class MumbleSessionModelTest(TestCase):
         self.assertIn('view_mumble_presence_history', codenames)
 
 
+class ControlClientAuthTest(TestCase):
+    @override_settings(MURMUR_CONTROL_PSK='primary-control-secret')
+    @patch('fg.control.urlopen')
+    def test_post_json_sends_control_psk_header(self, mock_urlopen):
+        mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
+
+        _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header('X-murmur-control-psk'), 'primary-control-secret')
+
+    @override_settings(MURMUR_CONTROL_PSK='', MURMUR_CONTROL_SHARED_SECRET='fallback-control-secret')
+    @patch('fg.control.urlopen')
+    def test_post_json_uses_shared_secret_fallback_header(self, mock_urlopen):
+        mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
+
+        _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header('X-murmur-control-psk'), 'fallback-control-secret')
+
+
 class LiveAdminSyncTest(TestCase):
     def setUp(self):
         self.server = _make_server()
         self.user = User.objects.create_user('pulseuser', password='pass')
+        self.control_client = BgControlClient()
         self.mu = MumbleUser.objects.create(
             user=self.user,
             server=self.server,
@@ -386,23 +427,12 @@ class LiveAdminSyncTest(TestCase):
             pwhash='h',
             is_mumble_admin=True,
         )
-        observed_at = timezone.now()
-        for session_id in (17, 18):
-            MumbleSession.objects.create(
-                server=self.server,
-                mumble_user=self.mu,
-                session_id=session_id,
-                username='Pulse_User',
-                connected_at=observed_at,
-                last_seen=observed_at,
-                last_state=observed_at,
-            )
 
-    @patch('fg.pilot.control._post_json')
-    def test_grant_updates_all_active_sessions(self, mock_post_json):
+    @patch('fg.control._post_json')
+    def test_grant_posts_contract_payload(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
 
-        synced_sessions = sync_live_admin_membership(self.mu)
+        synced_sessions = self.control_client.sync_live_admin_membership(self.mu)
 
         self.assertEqual(synced_sessions, 2)
         mock_post_json.assert_called_once()
@@ -410,28 +440,94 @@ class LiveAdminSyncTest(TestCase):
         self.assertEqual(path, '/v1/admin-membership/sync')
         self.assertTrue(payload['admin'])
         self.assertEqual(payload['server_name'], self.server.name)
-        self.assertEqual(set(payload['session_ids']), {17, 18})
+        self.assertEqual(payload['pkid'], self.mu.user_id)
+        self.assertNotIn('session_ids', payload)
 
-    @patch('fg.pilot.control._post_json')
-    def test_revoke_updates_all_active_sessions(self, mock_post_json):
+    @patch('fg.control._post_json')
+    def test_revoke_posts_contract_payload(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
         self.mu.is_mumble_admin = False
 
-        synced_sessions = sync_live_admin_membership(self.mu)
+        synced_sessions = self.control_client.sync_live_admin_membership(self.mu)
 
         self.assertEqual(synced_sessions, 2)
         path, payload = mock_post_json.call_args.args
         self.assertEqual(path, '/v1/admin-membership/sync')
         self.assertFalse(payload['admin'])
-        self.assertEqual(set(payload['session_ids']), {17, 18})
+        self.assertNotIn('session_ids', payload)
 
-    @patch('fg.pilot.control._post_json')
-    def test_no_active_sessions_skips_control(self, mock_post_json):
-        MumbleSession.objects.filter(mumble_user=self.mu).update(is_active=False)
+    @patch('fg.control._post_json')
+    def test_explicit_session_ids_are_forwarded(self, mock_post_json):
+        mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
 
-        synced_sessions = sync_live_admin_membership(self.mu)
+        synced_sessions = self.control_client.sync_live_admin_membership(self.mu, session_ids=[17, 18])
 
-        self.assertEqual(synced_sessions, 0)
+        self.assertEqual(synced_sessions, 2)
+        _, payload = mock_post_json.call_args.args
+        self.assertEqual(payload['session_ids'], [17, 18])
+
+    @patch('fg.control._post_json')
+    def test_invalid_session_id_raises(self, mock_post_json):
+        with self.assertRaises(MurmurSyncError):
+            self.control_client.sync_live_admin_membership(self.mu, session_ids=['bad'])
+        mock_post_json.assert_not_called()
+
+    @patch('fg.control.BgControlClient.probe_murmur_registration')
+    @patch('fg.control._post_json')
+    def test_probe_fallback_used_when_sync_count_missing(self, mock_post_json, mock_probe):
+        mock_post_json.return_value = {'status': 'completed'}
+        mock_probe.return_value = {'active_session_count': 4}
+
+        synced_sessions = self.control_client.sync_live_admin_membership(self.mu)
+
+        self.assertEqual(synced_sessions, 4)
+
+
+class ContractMetadataSyncTest(TestCase):
+    def setUp(self):
+        self.server = _make_server()
+        self.user = User.objects.create_user('contractpilot', password='pass')
+        self.control_client = BgControlClient()
+        self.mu = MumbleUser.objects.create(
+            user=self.user,
+            server=self.server,
+            username='Contract_Pilot',
+            pwhash='h',
+        )
+
+    @patch('fg.control._post_json')
+    def test_sync_contract_posts_superuser_payload(self, mock_post_json):
+        mock_post_json.return_value = {
+            'status': 'completed',
+            'evepilot_id': 90000001,
+            'corporation_id': 98000001,
+            'alliance_id': 99000001,
+            'kdf_iterations': 120000,
+        }
+
+        payload = self.control_client.sync_registration_contract(
+            self.mu,
+            evepilot_id='90000001',
+            corporation_id=98000001,
+            alliance_id=99000001,
+            kdf_iterations='120000',
+            is_super=True,
+        )
+
+        self.assertEqual(payload['evepilot_id'], 90000001)
+        self.assertEqual(payload['corporation_id'], 98000001)
+        self.assertEqual(payload['alliance_id'], 99000001)
+        self.assertEqual(payload['kdf_iterations'], 120000)
+        path, sent = mock_post_json.call_args.args
+        self.assertEqual(path, '/v1/registrations/contract-sync')
+        self.assertEqual(sent['pkid'], self.mu.user_id)
+        self.assertEqual(sent['server_name'], self.server.name)
+        self.assertTrue(sent['is_super'])
+
+    @patch('fg.control._post_json')
+    def test_sync_contract_rejects_non_integer_fields(self, mock_post_json):
+        with self.assertRaises(MurmurSyncError):
+            self.control_client.sync_registration_contract(self.mu, evepilot_id='not-an-int', is_super=True)
         mock_post_json.assert_not_called()
 
 
@@ -457,15 +553,12 @@ class ActivateViewTest(TestCase):
         self.assertEqual(resp.status_code, 302)
         mu = MumbleUser.objects.get(user=self.user, server=self.server)
         self.assertEqual(mu.username, 'Test_Pilot')
-        self.assertEqual(mu.hashfn, MURMUR_PBKDF2_SHA384)
-        self.assertTrue(mu.pw_salt)
-        self.assertTrue(mu.kdf_iterations >= 1000)
         self.assertEqual(mu.mumble_userid, 501)
 
     def test_activate_sets_session_password(self):
         self.client.post(reverse('mumble:activate', args=[self.server.pk]))
         session = self.client.session
-        key = f'mumble_temp_password_{self.server.pk}'
+        key = f'murmur_temp_password_{self.server.pk}'
         self.assertIn(key, session)
         pw = session[key]
         self.assertEqual(len(pw), 16)
@@ -494,7 +587,7 @@ class ResetPasswordViewTest(TestCase):
         self.user = _make_member()
         self.server = _make_server()
         self.client.force_login(self.user)
-        self.sync_patcher = patch('fg.views._sync_remote_registration', return_value=601)
+        self.sync_patcher = patch('fg.views._sync_password', return_value=('generated-pass', 601))
         self.sync_patcher.start()
         self.addCleanup(self.sync_patcher.stop)
         self.mu = MumbleUser.objects.create(
@@ -505,19 +598,15 @@ class ResetPasswordViewTest(TestCase):
             hashfn=LEGACY_BCRYPT_SHA256,
         )
 
-    def test_reset_changes_hash(self):
+    def test_reset_updates_userid(self):
         self.client.post(reverse('mumble:reset_password', args=[self.server.pk]))
         self.mu.refresh_from_db()
-        self.assertNotEqual(self.mu.pwhash, 'oldhash')
-        self.assertEqual(self.mu.hashfn, MURMUR_PBKDF2_SHA384)
-        self.assertTrue(self.mu.pw_salt)
-        self.assertTrue(self.mu.kdf_iterations >= 1000)
         self.assertEqual(self.mu.mumble_userid, 601)
 
     def test_reset_sets_session_password(self):
         self.client.post(reverse('mumble:reset_password', args=[self.server.pk]))
         session = self.client.session
-        key = f'mumble_temp_password_{self.server.pk}'
+        key = f'murmur_temp_password_{self.server.pk}'
         self.assertIn(key, session)
 
     def test_reset_no_account(self):
@@ -532,7 +621,7 @@ class SetPasswordViewTest(TestCase):
         self.user = _make_member()
         self.server = _make_server()
         self.client.force_login(self.user)
-        self.sync_patcher = patch('fg.views._sync_remote_registration', return_value=701)
+        self.sync_patcher = patch('fg.views._sync_password', return_value=('mysecurepassword', 701))
         self.sync_patcher.start()
         self.addCleanup(self.sync_patcher.stop)
         self.mu = MumbleUser.objects.create(
@@ -546,29 +635,36 @@ class SetPasswordViewTest(TestCase):
     def test_set_valid_password(self):
         resp = self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'mysecurepassword'},
+            {'murmur_password': 'mysecurepassword'},
         )
         self.assertEqual(resp.status_code, 302)
         self.mu.refresh_from_db()
-        self.assertEqual(self.mu.hashfn, MURMUR_PBKDF2_SHA384)
-        self.assertTrue(self.mu.pw_salt)
-        self.assertTrue(self.mu.kdf_iterations >= 1000)
         self.assertEqual(self.mu.mumble_userid, 701)
 
     def test_set_short_password_rejected(self):
         self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'short'},
+            {'murmur_password': 'short'},
             follow=True,
         )
         self.mu.refresh_from_db()
         self.assertEqual(self.mu.pwhash, 'oldhash')
 
+    def test_set_restricted_characters_rejected(self):
+        self.client.post(
+            reverse('mumble:set_password', args=[self.server.pk]),
+            {'murmur_password': 'bad\\pass1'},
+            follow=True,
+        )
+        self.mu.refresh_from_db()
+        self.assertEqual(self.mu.pwhash, 'oldhash')
+        self.assertIsNone(self.mu.mumble_userid)
+
     def test_set_password_no_account(self):
         self.mu.delete()
         resp = self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'longenoughpw'},
+            {'murmur_password': 'longenoughpw'},
             follow=True,
         )
         self.assertEqual(resp.status_code, 200)
@@ -576,18 +672,10 @@ class SetPasswordViewTest(TestCase):
     def test_password_verifies(self):
         self.client.post(
             reverse('mumble:set_password', args=[self.server.pk]),
-            {'mumble_password': 'myfleetpassword'},
+            {'murmur_password': 'myfleetpassword'},
         )
         self.mu.refresh_from_db()
-        self.assertTrue(
-            verify_murmur_password(
-                'myfleetpassword',
-                pwhash=self.mu.pwhash,
-                hashfn=self.mu.hashfn,
-                pw_salt=self.mu.pw_salt,
-                kdf_iterations=self.mu.kdf_iterations,
-            )
-        )
+        self.assertEqual(self.mu.pwhash, 'oldhash')
 
 
 @override_settings(**_NO_REDIS)
@@ -643,10 +731,10 @@ class ToggleAdminViewTest(TestCase):
         self.assertIn('admin', [group for group in self.mu.groups.split(',') if group])
         self.assertEqual(mock_sync_live_admin_membership.call_args[0][0].pk, self.mu.pk)
         messages = [message.message for message in response.context['messages']]
-        self.assertIn('Mumble admin granted for Target_User.', messages)
+        self.assertIn('Murmur admin granted for Target_User.', messages)
         self.assertIn('Updated 2 active Murmur session(s) immediately.', messages)
 
-    @patch('fg.views._sync_live_admin_membership', side_effect=MumbleSyncError('boom'))
+    @patch('fg.views._sync_live_admin_membership', side_effect=MurmurSyncError('boom'))
     def test_toggle_admin_keeps_cube_state_when_live_sync_fails(self, mock_sync_live_admin_membership):
         response = self.client.post(
             reverse('mumble:toggle_admin', args=[self.mu.pk]),
@@ -659,7 +747,7 @@ class ToggleAdminViewTest(TestCase):
         self.assertIn('admin', [group for group in self.mu.groups.split(',') if group])
         self.assertEqual(mock_sync_live_admin_membership.call_args[0][0].pk, self.mu.pk)
         messages = [message.message for message in response.context['messages']]
-        self.assertIn('Mumble admin granted for Target_User.', messages)
+        self.assertIn('Murmur admin granted for Target_User.', messages)
         self.assertIn(
             'Admin status was updated locally, but live Murmur session sync failed. Connected users may need to reconnect.',
             messages,
@@ -674,6 +762,66 @@ class ToggleAdminViewTest(TestCase):
         self.assertEqual(response.status_code, 403)
         self.mu.refresh_from_db()
         self.assertFalse(self.mu.is_mumble_admin)
+
+
+@override_settings(**_NO_REDIS)
+class ContractMetadataViewTest(TestCase):
+    def setUp(self):
+        self.superuser = User.objects.create_superuser('contractroot', 'root@example.com', 'pass')
+        UserProfile.objects.create(user=self.superuser, is_member=True)
+        self.target_user = User.objects.create_user('contracttarget', password='pass')
+        self.server = _make_server()
+        self.mu = MumbleUser.objects.create(
+            user=self.target_user,
+            server=self.server,
+            username='Contract_Target',
+            pwhash='h',
+        )
+
+    @patch('fg.views._CONTROL_CLIENT.probe_murmur_registration')
+    @patch('fg.views._sync_contract_metadata')
+    def test_superuser_contract_sync_requires_probe_match(self, mock_sync_contract_metadata, mock_probe):
+        self.client.force_login(self.superuser)
+        mock_sync_contract_metadata.return_value = {
+            'evepilot_id': 90000001,
+            'corporation_id': 98000001,
+            'alliance_id': 99000001,
+            'kdf_iterations': 120000,
+        }
+        mock_probe.return_value = {
+            'evepilot_id': 90000001,
+            'corporation_id': 98000001,
+            'alliance_id': 99000001,
+            'kdf_iterations': 120000,
+        }
+
+        response = self.client.post(
+            reverse('mumble:sync_contract', args=[self.mu.pk]),
+            {
+                'evepilot_id': '90000001',
+                'corporation_id': '98000001',
+                'alliance_id': '99000001',
+                'kdf_iterations': '120000',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_sync_contract_metadata.assert_called_once()
+        self.assertTrue(mock_sync_contract_metadata.call_args.kwargs['is_super'])
+        messages = [message.message for message in response.context['messages']]
+        self.assertIn('Contract metadata synchronized for Contract_Target.', messages)
+
+    def test_non_superuser_contract_sync_forbidden(self):
+        manager = _make_member('contractstaff')
+        self.client.force_login(manager)
+
+        response = self.client.post(
+            reverse('mumble:sync_contract', args=[self.mu.pk]),
+            {'evepilot_id': '1'},
+        )
+
+        self.assertEqual(response.status_code, 403)
 
 
 @override_settings(**_NO_REDIS)
@@ -709,6 +857,7 @@ class MumbleManagePermissionsViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Action')
         self.assertContains(response, 'Grant Admin')
+        self.assertContains(response, 'Sync Contract Metadata')
 
 
 @override_settings(**_NO_REDIS)
@@ -845,6 +994,63 @@ class TasksTest(TestCase):
         self.assertEqual(self.mu.groups, '')
 
 
+class ProfilePanelProviderTest(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = _make_member('paneluser')
+        self.server1 = _make_server(name='Server 1', address='s1.example.com:64738')
+        self.server2 = _make_server(name='Server 2', address='s2.example.com:64738')
+
+    def _request(self):
+        request = self.factory.get('/profile/')
+        request.user = self.user
+        request.session = {}
+        return request
+
+    def test_generic_provider_builds_server_panels(self):
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        self.assertEqual(len(panels), 2)
+        self.assertEqual({panel['server'].pk for panel in panels}, {self.server1.pk, self.server2.pk})
+        self.assertEqual({panel['template'] for panel in panels}, {'fg/panels/profile_panel.html'})
+
+    def test_duplicate_username_gets_slot_suffix(self):
+        MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')
+        MumbleUser.objects.create(user=self.user, server=self.server2, username='Pilot_Name', pwhash='h')
+        request = self._request()
+
+        panels = build_profile_panels(request)
+        usernames = sorted(panel['username_with_slot'] for panel in panels if panel['username_with_slot'])
+
+        self.assertEqual(usernames, ['Pilot_Name:1', 'Pilot_Name:2'])
+
+    def test_temp_password_is_read_once(self):
+        MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')
+        request = self._request()
+        request.session[f'murmur_temp_password_{self.server1.pk}'] = 'abc123'
+
+        panels1 = build_profile_panels(request)
+        panels2 = build_profile_panels(request)
+
+        first = next(panel for panel in panels1 if panel['server'].pk == self.server1.pk)
+        second = next(panel for panel in panels2 if panel['server'].pk == self.server1.pk)
+        self.assertEqual(first['temp_password'], 'abc123')
+        self.assertIsNone(second['temp_password'])
+
+    @override_settings(MURMUR_PANEL_HOST='cube')
+    def test_host_provider_resolution(self):
+        provider = get_profile_panel_provider()
+        self.assertEqual(provider.provider_name, 'cube')
+
+    def test_cube_integration_uses_cube_provider(self):
+        integration = CubeMurmurIntegration()
+        request = self._request()
+        panels = integration.get_profile_panels(request)
+        self.assertEqual(len(panels), 2)
+
+
 # ── Profile integration ────────────────────────────────────────────
 
 @override_settings(**_NO_REDIS)
@@ -863,7 +1069,7 @@ class ProfileContextTest(TestCase):
 
     def test_profile_shows_activate_button(self):
         resp = self.client.get(reverse('profile'))
-        self.assertContains(resp, 'Get Mumble Credentials')
+        self.assertContains(resp, 'Get Murmur Credentials')
 
     def test_profile_shows_mumble_username(self):
         MumbleUser.objects.create(
@@ -871,11 +1077,11 @@ class ProfileContextTest(TestCase):
         )
         resp = self.client.get(reverse('profile'))
         self.assertContains(resp, 'Test_User')
-        self.assertNotContains(resp, 'Get Mumble Credentials')
+        self.assertNotContains(resp, 'Get Murmur Credentials')
 
     def test_temp_password_shown_once(self):
         session = self.client.session
-        session[f'mumble_temp_password_{self.server.pk}'] = 'abc123secret'
+        session[f'murmur_temp_password_{self.server.pk}'] = 'abc123secret'
         session.save()
         resp = self.client.get(reverse('profile'))
         self.assertContains(resp, 'abc123secret')

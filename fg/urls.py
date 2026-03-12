@@ -10,4 +10,5 @@ urlpatterns = [
     path('<int:server_id>/deactivate/', views.deactivate, name='deactivate'),
     path('manage/', views.mumble_manage, name='manage'),
     path('<int:mumble_user_id>/toggle-admin/', views.toggle_admin, name='toggle_admin'),
+    path('<int:mumble_user_id>/sync-contract/', views.sync_contract, name='sync_contract'),
 ]

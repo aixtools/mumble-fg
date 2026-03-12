@@ -1,6 +1,5 @@
 import logging
 import secrets
-import string
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -13,33 +12,33 @@ from django.views.decorators.http import require_POST
 from accounts.models import EveCharacter, GroupMembership
 from modules.corporation.core import _user_is_alliance_leader
 from modules.corporation.models import CorporationSettings
-from .passwords import build_murmur_password_record
-from .pilot.control import (
-    MumbleSyncError,
-    sync_live_admin_membership,
-    sync_mumble_registration,
-    unregister_mumble_registration,
-)
-from .pilot.models import MumbleServer, MumbleSession, MumbleUser
+from .control import BgControlClient, MurmurSyncError
+from .models import MumbleServer, MumbleSession, MumbleUser
 
 logger = logging.getLogger(__name__)
+_CONTROL_CLIENT = BgControlClient()
+
+_FORBIDDEN_PASSWORD_CHARS = {"'", '"', '`', '\\'}
+_PASSWORD_ALPHABET = ''.join(
+    chr(code) for code in range(33, 127) if chr(code) not in _FORBIDDEN_PASSWORD_CHARS
+)
 
 
 def _generate_password(length=16):
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
+    return ''.join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
 
 
-def _apply_password_record(mumble_user, password):
-    record = build_murmur_password_record(password)
-    mumble_user.pwhash = record['pwhash']
-    mumble_user.hashfn = record['hashfn']
-    mumble_user.pw_salt = record['pw_salt']
-    mumble_user.kdf_iterations = record['kdf_iterations']
+def _password_has_supported_chars(password):
+    for ch in password:
+        if ord(ch) < 33 or ord(ch) > 126:
+            return False
+        if ch in _FORBIDDEN_PASSWORD_CHARS:
+            return False
+    return True
 
 
 def _sync_remote_registration(mumble_user, password=None):
-    return sync_mumble_registration(
+    return _CONTROL_CLIENT.sync_murmur_registration(
         mumble_user,
         password=password,
         requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
@@ -47,17 +46,65 @@ def _sync_remote_registration(mumble_user, password=None):
 
 
 def _unregister_remote_registration(mumble_user):
-    return unregister_mumble_registration(
+    return _CONTROL_CLIENT.unregister_murmur_registration(
         mumble_user,
         requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
     )
 
 
 def _sync_live_admin_membership(mumble_user):
-    return sync_live_admin_membership(
+    return _CONTROL_CLIENT.sync_live_admin_membership(
         mumble_user,
         requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
     )
+
+
+def _sync_password(mumble_user, password=None):
+    return _CONTROL_CLIENT.reset_murmur_password(
+        mumble_user,
+        password=password,
+        requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
+    )
+
+
+def _sync_contract_metadata(
+    mumble_user,
+    *,
+    evepilot_id,
+    corporation_id,
+    alliance_id,
+    kdf_iterations,
+    requested_by,
+    is_super,
+):
+    return _CONTROL_CLIENT.sync_registration_contract(
+        mumble_user,
+        evepilot_id=evepilot_id,
+        corporation_id=corporation_id,
+        alliance_id=alliance_id,
+        kdf_iterations=kdf_iterations,
+        requested_by=requested_by,
+        is_super=is_super,
+    )
+
+
+def _coerce_optional_int(value, *, field_name):
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except (TypeError, ValueError) as exc:
+        raise MurmurSyncError(f'{field_name} must be an integer') from exc
+
+
+def _apply_probe_contract_view(mumble_user, probe_row):
+    mumble_user.contract_evepilot_id = probe_row.get('evepilot_id')
+    mumble_user.contract_corporation_id = probe_row.get('corporation_id')
+    mumble_user.contract_alliance_id = probe_row.get('alliance_id')
+    mumble_user.contract_kdf_iterations = probe_row.get('kdf_iterations')
 
 
 def _has_alliance_leader_membership(user):
@@ -154,7 +201,7 @@ def activate(request, server_id):
     server = get_object_or_404(MumbleServer, pk=server_id, is_active=True)
 
     if MumbleUser.objects.filter(user=request.user, server=server).exists():
-        messages.info(request, _('Mumble account already exists on this server.'))
+        messages.info(request, _('Murmur account already exists on this server.'))
         return redirect('profile')
 
     password = _generate_password()
@@ -164,12 +211,12 @@ def activate(request, server_id):
         username=_get_mumble_username(request.user),
         display_name=_compute_display_name(request.user),
         groups=_compute_groups(request.user, mumble_user=None),
+        pwhash='',
     )
-    _apply_password_record(mumble_user, password)
     mumble_user.save()
     try:
-        mumble_userid = _sync_remote_registration(mumble_user, password=password)
-    except MumbleSyncError as exc:
+        murmur_userid = _sync_remote_registration(mumble_user, password=password)
+    except MurmurSyncError as exc:
         logger.warning(
             'Failed to provision Murmur registration for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -178,14 +225,14 @@ def activate(request, server_id):
         )
         messages.warning(
             request,
-            _('Mumble account was created locally, but Murmur registration sync failed. Requesting a new password later will retry it.'),
+            _('Murmur account was created locally, but Murmur registration sync failed. Requesting a new password later will retry it.'),
         )
     else:
-        if mumble_user.mumble_userid != mumble_userid:
-            mumble_user.mumble_userid = mumble_userid
+        if mumble_user.mumble_userid != murmur_userid:
+            mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Mumble account created.'))
-    request.session[f'mumble_temp_password_{server_id}'] = password
+        messages.success(request, _('Murmur account created.'))
+    request.session[f'murmur_temp_password_{server_id}'] = password
     return redirect('profile')
 
 
@@ -195,15 +242,13 @@ def reset_password(request, server_id):
     try:
         mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
     except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Mumble account found.'))
+        messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
     password = _generate_password()
-    _apply_password_record(mumble_user, password)
-    mumble_user.save(update_fields=['pwhash', 'hashfn', 'pw_salt', 'kdf_iterations', 'updated_at'])
     try:
-        mumble_userid = _sync_remote_registration(mumble_user, password=password)
-    except MumbleSyncError as exc:
+        password, murmur_userid = _sync_password(mumble_user)
+    except MurmurSyncError as exc:
         logger.warning(
             'Failed to sync Murmur password reset for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -212,14 +257,14 @@ def reset_password(request, server_id):
         )
         messages.warning(
             request,
-            _('Mumble password was reset locally, but Murmur registration sync failed. Resetting again later will retry it.'),
+            _('Murmur password reset request could not complete now. Retrying later will request a new password again.'),
         )
     else:
-        if mumble_user.mumble_userid != mumble_userid:
-            mumble_user.mumble_userid = mumble_userid
+        if mumble_user.mumble_userid != murmur_userid:
+            mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Mumble password has been reset.'))
-    request.session[f'mumble_temp_password_{server_id}'] = password
+        messages.success(request, _('Murmur password has been reset.'))
+    request.session[f'murmur_temp_password_{server_id}'] = password
     return redirect('profile')
 
 
@@ -229,19 +274,20 @@ def set_password(request, server_id):
     try:
         mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
     except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Mumble account found.'))
+        messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
-    password = request.POST.get('mumble_password', '')
+    password = request.POST.get('murmur_password', '')
     if len(password) < 8:
         messages.error(request, _('Password must be at least 8 characters.'))
         return redirect('profile')
+    if not _password_has_supported_chars(password):
+        messages.error(request, _("Password may not contain any of: ' \" ` \\"))
+        return redirect('profile')
 
-    _apply_password_record(mumble_user, password)
-    mumble_user.save(update_fields=['pwhash', 'hashfn', 'pw_salt', 'kdf_iterations', 'updated_at'])
     try:
-        mumble_userid = _sync_remote_registration(mumble_user, password=password)
-    except MumbleSyncError as exc:
+        _, murmur_userid = _sync_password(mumble_user, password=password)
+    except MurmurSyncError as exc:
         logger.warning(
             'Failed to sync Murmur custom password for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -250,13 +296,13 @@ def set_password(request, server_id):
         )
         messages.warning(
             request,
-            _('Mumble password was updated locally, but Murmur registration sync failed. Setting it again later will retry it.'),
+            _('Murmur password set request could not complete now. Retrying later will re-issue the request.'),
         )
     else:
-        if mumble_user.mumble_userid != mumble_userid:
-            mumble_user.mumble_userid = mumble_userid
+        if mumble_user.mumble_userid != murmur_userid:
+            mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Mumble password updated.'))
+        messages.success(request, _('Murmur password updated.'))
     return redirect('profile')
 
 
@@ -266,12 +312,12 @@ def deactivate(request, server_id):
     try:
         mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
     except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Mumble account found.'))
+        messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
     try:
         _unregister_remote_registration(mumble_user)
-    except MumbleSyncError as exc:
+    except MurmurSyncError as exc:
         logger.warning(
             'Failed to unregister Murmur user for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -280,21 +326,21 @@ def deactivate(request, server_id):
         )
         messages.error(
             request,
-            _('Mumble account could not be deactivated because Murmur registration sync failed.'),
+            _('Murmur account could not be deactivated because Murmur registration sync failed.'),
         )
         return redirect('profile')
 
     try:
         mumble_user.delete()
-        messages.success(request, _('Mumble account deactivated.'))
+        messages.success(request, _('Murmur account deactivated.'))
     except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Mumble account found.'))
+        messages.error(request, _('No Murmur account found.'))
     return redirect('profile')
 
 
 def _can_manage_mumble(user):
     # Legacy access path retained for now. This should eventually be replaced
-    # by explicit Mumble permission checks so presence/admin access flows
+    # by explicit Murmur permission checks so presence/admin access flows
     # through one permission model instead of overlapping staff/group gates.
     return user.is_staff or _user_is_alliance_leader(user) or user.has_perm('mumble.manage_mumble_admin')
 
@@ -332,12 +378,29 @@ def mumble_manage(request):
         )
         .order_by('server__display_order', 'username')
     )
+    can_manage_contract = request.user.is_superuser
+    if can_manage_contract:
+        probe_rows_by_key = {}
+        for pkid in sorted({mumble_user.user_id for mumble_user in mumble_users}):
+            try:
+                registrations = _CONTROL_CLIENT.probe_pilot_registrations(pkid)
+            except MurmurSyncError as exc:
+                logger.warning('Failed to probe contract data for pkid=%s: %s', pkid, exc)
+                continue
+            for registration in registrations:
+                server_name = registration.get('server_name')
+                probe_rows_by_key[(pkid, server_name)] = registration
+
+        for mumble_user in mumble_users:
+            probe_row = probe_rows_by_key.get((mumble_user.user_id, mumble_user.server.name), {})
+            _apply_probe_contract_view(mumble_user, probe_row)
     return render(
         request,
         'fg/manage.html',
         {
             'mumble_users': mumble_users,
             'can_manage_admin': _can_manage_mumble_admin(request.user),
+            'can_manage_contract': can_manage_contract,
         },
     )
 
@@ -354,7 +417,7 @@ def toggle_admin(request, mumble_user_id):
     synced_sessions = 0
     try:
         synced_sessions = _sync_live_admin_membership(mumble_user)
-    except MumbleSyncError as exc:
+    except MurmurSyncError as exc:
         logger.warning(
             'Failed to sync live Murmur admin membership for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -366,7 +429,7 @@ def toggle_admin(request, mumble_user_id):
             _('Admin status was updated locally, but live Murmur session sync failed. Connected users may need to reconnect.'),
         )
     status = _('granted') if mumble_user.is_mumble_admin else _('revoked')
-    messages.success(request, _('Mumble admin %(status)s for %(user)s.') % {
+    messages.success(request, _('Murmur admin %(status)s for %(user)s.') % {
         'status': status, 'user': mumble_user.username,
     })
     if synced_sessions:
@@ -374,4 +437,68 @@ def toggle_admin(request, mumble_user_id):
             request,
             _('Updated %(count)s active Murmur session(s) immediately.') % {'count': synced_sessions},
         )
+    return redirect('mumble:manage')
+
+
+@require_POST
+@login_required
+def sync_contract(request, mumble_user_id):
+    if not request.user.is_superuser:
+        return HttpResponseForbidden()
+
+    mumble_user = get_object_or_404(MumbleUser, pk=mumble_user_id)
+    try:
+        requested_values = {
+            'evepilot_id': _coerce_optional_int(request.POST.get('evepilot_id'), field_name='evepilot_id'),
+            'corporation_id': _coerce_optional_int(request.POST.get('corporation_id'), field_name='corporation_id'),
+            'alliance_id': _coerce_optional_int(request.POST.get('alliance_id'), field_name='alliance_id'),
+            'kdf_iterations': _coerce_optional_int(request.POST.get('kdf_iterations'), field_name='kdf_iterations'),
+        }
+    except MurmurSyncError as exc:
+        messages.error(request, _('Invalid contract metadata: %(error)s') % {'error': exc})
+        return redirect('mumble:manage')
+
+    try:
+        _sync_contract_metadata(
+            mumble_user,
+            requested_by=str(getattr(request.user, 'username', 'unknown')),
+            is_super=True,
+            **requested_values,
+        )
+        registration = _CONTROL_CLIENT.probe_murmur_registration(mumble_user)
+    except MurmurSyncError as exc:
+        logger.warning(
+            'Failed to sync contract metadata for MumbleUser pk=%s on server=%s: %s',
+            mumble_user.pk,
+            mumble_user.server_id,
+            exc,
+        )
+        messages.warning(
+            request,
+            _('Contract metadata update request failed: %(error)s') % {'error': exc},
+        )
+        return redirect('mumble:manage')
+
+    if not registration:
+        messages.warning(
+            request,
+            _('Contract metadata was sent, but probe verification returned no registration row.'),
+        )
+        return redirect('mumble:manage')
+
+    mismatched_fields = [
+        field_name
+        for field_name, expected in requested_values.items()
+        if registration.get(field_name) != expected
+    ]
+    if mismatched_fields:
+        messages.warning(
+            request,
+            _('Contract metadata update did not verify for fields: %(fields)s') % {
+                'fields': ', '.join(sorted(mismatched_fields)),
+            },
+        )
+        return redirect('mumble:manage')
+
+    messages.success(request, _('Contract metadata synchronized for %(user)s.') % {'user': mumble_user.username})
     return redirect('mumble:manage')
