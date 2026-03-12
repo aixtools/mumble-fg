@@ -8,6 +8,11 @@ This checklist validates:
 
 Use this after deploying both repos.
 
+Standalone-first note:
+
+- run this checklist first against a standalone bg URL (for example `http://127.0.0.1:18080`)
+- only after it passes should the same checks be repeated through host-integrated routes
+
 ## Prerequisites
 
 - `mumble-bg` reachable at configured `MURMUR_CONTROL_URL`
