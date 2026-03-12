@@ -807,7 +807,7 @@ class MumbleManagePresenceColumnsViewTest(TestCase):
         self.assertContains(response, 'Grant Admin')
 
 
-# ── Celery tasks ────────────────────────────────────────────────────
+# ── Mumble group sync helpers ───────────────────────────────────────
 
 class TasksTest(TestCase):
     def setUp(self):
@@ -835,9 +835,10 @@ class TasksTest(TestCase):
 
     def test_update_all_mumble_groups(self):
         from fg.tasks import update_all_mumble_groups
-        with patch('fg.tasks.update_mumble_groups.delay') as mock_delay:
+        with patch('fg.tasks.update_mumble_groups') as mock_update:
+            mock_update.side_effect = lambda *_args, **_kwargs: None
             update_all_mumble_groups()
-            mock_delay.assert_called_once_with(self.mu.pk)
+            mock_update.assert_called_once_with(self.mu.pk)
 
     def test_update_skips_inactive(self):
         self.mu.is_active = False

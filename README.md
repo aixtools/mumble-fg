@@ -6,7 +6,7 @@ This repository now holds the Django/UI code that remains coupled to the host ap
 
 - profile and admin views for Mumble account management
 - pilot-side sidebar registration
-- Celery tasks for display-name and group refresh
+- helpers for display-name and group refresh
 - the display-name backfill management command
 - the legacy Django test module for those flows
 

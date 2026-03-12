@@ -1,14 +1,11 @@
 import logging
 
-from celery import shared_task
-
 from .pilot.models import MumbleUser
 from .views import _compute_display_name, _compute_groups
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(name='mumble.update_mumble_groups')
 def update_mumble_groups(mumble_user_id):
     try:
         mumble_user = MumbleUser.objects.select_related('user').get(
@@ -34,9 +31,8 @@ def update_mumble_groups(mumble_user_id):
         )
 
 
-@shared_task(name='mumble.update_all_mumble_groups')
 def update_all_mumble_groups():
     mu_ids = list(MumbleUser.objects.filter(is_active=True).values_list('pk', flat=True))
-    logger.info('Scheduling mumble group updates for %d active users', len(mu_ids))
+    logger.info('Running mumble group updates for %d active users', len(mu_ids))
     for mu_id in mu_ids:
-        update_mumble_groups.delay(mu_id)
+        update_mumble_groups(mu_id)
