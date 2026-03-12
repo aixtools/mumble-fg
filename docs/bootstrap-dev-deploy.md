@@ -12,7 +12,7 @@ This document covers `mumble-fg` deployment to a dev host using GitHub Actions.
 
 The workflow in `.github/workflows/deploy-dev.yml`:
 
-- resolves deploy target from a single JSON secret (default `DEV_DEPLOY_TARGET`)
+- resolves deploy target from a single JSON secret (default `CUBE_DEV_CUBE`)
 - rsyncs this repository to `project_dir` (defaults to `/home/<user>/mumble-fg`)
 - optionally restarts units listed in `service_units`
 - verifies expected FG files exist on the host
@@ -24,7 +24,7 @@ runtime secrets.
 
 Required:
 
-- deploy target JSON secret (default secret name: `DEV_DEPLOY_TARGET`)
+- deploy target JSON secret (default secret name: `CUBE_DEV_CUBE`)
 
 Optional:
 

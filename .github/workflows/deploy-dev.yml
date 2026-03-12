@@ -10,13 +10,13 @@ on:
       deploy_target_name:
         description: 'Secret name containing deploy target JSON'
         required: false
-        default: 'DEV_DEPLOY_TARGET'
+        default: 'CUBE_DEV_CUBE'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      DEPLOY_TARGET_NAME: ${{ github.event.inputs.deploy_target_name || 'DEV_DEPLOY_TARGET' }}
+      DEPLOY_TARGET_NAME: ${{ github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE' }}
 
     steps:
       - name: Checkout code
@@ -24,7 +24,7 @@ jobs:
 
       - name: Resolve deploy target
         env:
-          DEPLOY_TARGET_JSON: ${{ secrets[github.event.inputs.deploy_target_name || 'DEV_DEPLOY_TARGET'] }}
+          DEPLOY_TARGET_JSON: ${{ secrets[github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE'] }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
