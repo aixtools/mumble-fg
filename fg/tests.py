@@ -483,6 +483,54 @@ class LiveAdminSyncTest(TestCase):
         self.assertEqual(synced_sessions, 4)
 
 
+class ContractMetadataSyncTest(TestCase):
+    def setUp(self):
+        self.server = _make_server()
+        self.user = User.objects.create_user('contractpilot', password='pass')
+        self.control_client = BgControlClient()
+        self.mu = MumbleUser.objects.create(
+            user=self.user,
+            server=self.server,
+            username='Contract_Pilot',
+            pwhash='h',
+        )
+
+    @patch('fg.control._post_json')
+    def test_sync_contract_posts_superuser_payload(self, mock_post_json):
+        mock_post_json.return_value = {
+            'status': 'completed',
+            'evepilot_id': 90000001,
+            'corporation_id': 98000001,
+            'alliance_id': 99000001,
+            'kdf_iterations': 120000,
+        }
+
+        payload = self.control_client.sync_registration_contract(
+            self.mu,
+            evepilot_id='90000001',
+            corporation_id=98000001,
+            alliance_id=99000001,
+            kdf_iterations='120000',
+            is_super=True,
+        )
+
+        self.assertEqual(payload['evepilot_id'], 90000001)
+        self.assertEqual(payload['corporation_id'], 98000001)
+        self.assertEqual(payload['alliance_id'], 99000001)
+        self.assertEqual(payload['kdf_iterations'], 120000)
+        path, sent = mock_post_json.call_args.args
+        self.assertEqual(path, '/v1/registrations/contract-sync')
+        self.assertEqual(sent['pkid'], self.mu.user_id)
+        self.assertEqual(sent['server_name'], self.server.name)
+        self.assertTrue(sent['is_super'])
+
+    @patch('fg.control._post_json')
+    def test_sync_contract_rejects_non_integer_fields(self, mock_post_json):
+        with self.assertRaises(MurmurSyncError):
+            self.control_client.sync_registration_contract(self.mu, evepilot_id='not-an-int', is_super=True)
+        mock_post_json.assert_not_called()
+
+
 # ── Views ───────────────────────────────────────────────────────────
 
 @override_settings(**_NO_REDIS)
@@ -717,6 +765,66 @@ class ToggleAdminViewTest(TestCase):
 
 
 @override_settings(**_NO_REDIS)
+class ContractMetadataViewTest(TestCase):
+    def setUp(self):
+        self.superuser = User.objects.create_superuser('contractroot', 'root@example.com', 'pass')
+        UserProfile.objects.create(user=self.superuser, is_member=True)
+        self.target_user = User.objects.create_user('contracttarget', password='pass')
+        self.server = _make_server()
+        self.mu = MumbleUser.objects.create(
+            user=self.target_user,
+            server=self.server,
+            username='Contract_Target',
+            pwhash='h',
+        )
+
+    @patch('fg.views._CONTROL_CLIENT.probe_murmur_registration')
+    @patch('fg.views._sync_contract_metadata')
+    def test_superuser_contract_sync_requires_probe_match(self, mock_sync_contract_metadata, mock_probe):
+        self.client.force_login(self.superuser)
+        mock_sync_contract_metadata.return_value = {
+            'evepilot_id': 90000001,
+            'corporation_id': 98000001,
+            'alliance_id': 99000001,
+            'kdf_iterations': 120000,
+        }
+        mock_probe.return_value = {
+            'evepilot_id': 90000001,
+            'corporation_id': 98000001,
+            'alliance_id': 99000001,
+            'kdf_iterations': 120000,
+        }
+
+        response = self.client.post(
+            reverse('mumble:sync_contract', args=[self.mu.pk]),
+            {
+                'evepilot_id': '90000001',
+                'corporation_id': '98000001',
+                'alliance_id': '99000001',
+                'kdf_iterations': '120000',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_sync_contract_metadata.assert_called_once()
+        self.assertTrue(mock_sync_contract_metadata.call_args.kwargs['is_super'])
+        messages = [message.message for message in response.context['messages']]
+        self.assertIn('Contract metadata synchronized for Contract_Target.', messages)
+
+    def test_non_superuser_contract_sync_forbidden(self):
+        manager = _make_member('contractstaff')
+        self.client.force_login(manager)
+
+        response = self.client.post(
+            reverse('mumble:sync_contract', args=[self.mu.pk]),
+            {'evepilot_id': '1'},
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+
+@override_settings(**_NO_REDIS)
 class MumbleManagePermissionsViewTest(TestCase):
     def setUp(self):
         self.server = _make_server()
@@ -749,6 +857,7 @@ class MumbleManagePermissionsViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Action')
         self.assertContains(response, 'Grant Admin')
+        self.assertContains(response, 'Sync Contract Metadata')
 
 
 @override_settings(**_NO_REDIS)

@@ -173,6 +173,19 @@ def _extract_password(response: dict[str, Any]) -> str | None:
     return None
 
 
+def _normalize_optional_int(value: Any, *, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise MurmurSyncError(f'{field} must be an integer') from None
+
+
 def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[str, Any]:
     payload = {
         'pkid': mumble_user.user_id,
@@ -228,20 +241,21 @@ class BgControlClient:
         return False
 
     def probe_murmur_registration(self, mumble_user) -> dict[str, Any] | None:
-        response = _get_json(f'/v1/pilots/{mumble_user.user_id}', allow_not_found=True)
-        if str(response.get('status', '')).lower() == 'not_found':
-            return None
-
-        registrations = response.get('registrations')
-        if not isinstance(registrations, list):
-            raise MurmurSyncError('Probe response did not include registrations')
-
-        for registration in registrations:
+        for registration in self.probe_pilot_registrations(mumble_user.user_id):
             if not isinstance(registration, dict):
                 continue
             if registration.get('server_name') == mumble_user.server.name:
                 return registration
         return None
+
+    def probe_pilot_registrations(self, pkid: int) -> list[dict[str, Any]]:
+        response = _get_json(f'/v1/pilots/{int(pkid)}', allow_not_found=True)
+        if str(response.get('status', '')).lower() == 'not_found':
+            return []
+        registrations = response.get('registrations')
+        if not isinstance(registrations, list):
+            raise MurmurSyncError('Probe response did not include registrations')
+        return [registration for registration in registrations if isinstance(registration, dict)]
 
     @staticmethod
     def _normalize_session_ids(session_ids: Iterable[int]) -> list[int]:
@@ -306,6 +320,34 @@ class BgControlClient:
         if resolved_password is None:
             raise MurmurSyncError('Control response did not include password')
         return resolved_password, _extract_murmur_userid(response)
+
+    def sync_registration_contract(
+        self,
+        mumble_user,
+        *,
+        evepilot_id: int | str | None = None,
+        corporation_id: int | str | None = None,
+        alliance_id: int | str | None = None,
+        kdf_iterations: int | str | None = None,
+        requested_by: str | None = None,
+        is_super: bool = False,
+    ) -> dict[str, int | None]:
+        payload = {
+            'pkid': mumble_user.user_id,
+            'server_name': mumble_user.server.name,
+            'evepilot_id': _normalize_optional_int(evepilot_id, field='evepilot_id'),
+            'corporation_id': _normalize_optional_int(corporation_id, field='corporation_id'),
+            'alliance_id': _normalize_optional_int(alliance_id, field='alliance_id'),
+            'kdf_iterations': _normalize_optional_int(kdf_iterations, field='kdf_iterations'),
+            'is_super': bool(is_super),
+        }
+        response = _post_json('/v1/registrations/contract-sync', payload, requested_by=requested_by)
+        return {
+            'evepilot_id': _normalize_optional_int(response.get('evepilot_id'), field='evepilot_id'),
+            'corporation_id': _normalize_optional_int(response.get('corporation_id'), field='corporation_id'),
+            'alliance_id': _normalize_optional_int(response.get('alliance_id'), field='alliance_id'),
+            'kdf_iterations': _normalize_optional_int(response.get('kdf_iterations'), field='kdf_iterations'),
+        }
 
 
 __all__ = [

@@ -67,6 +67,46 @@ def _sync_password(mumble_user, password=None):
     )
 
 
+def _sync_contract_metadata(
+    mumble_user,
+    *,
+    evepilot_id,
+    corporation_id,
+    alliance_id,
+    kdf_iterations,
+    requested_by,
+    is_super,
+):
+    return _CONTROL_CLIENT.sync_registration_contract(
+        mumble_user,
+        evepilot_id=evepilot_id,
+        corporation_id=corporation_id,
+        alliance_id=alliance_id,
+        kdf_iterations=kdf_iterations,
+        requested_by=requested_by,
+        is_super=is_super,
+    )
+
+
+def _coerce_optional_int(value, *, field_name):
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except (TypeError, ValueError) as exc:
+        raise MurmurSyncError(f'{field_name} must be an integer') from exc
+
+
+def _apply_probe_contract_view(mumble_user, probe_row):
+    mumble_user.contract_evepilot_id = probe_row.get('evepilot_id')
+    mumble_user.contract_corporation_id = probe_row.get('corporation_id')
+    mumble_user.contract_alliance_id = probe_row.get('alliance_id')
+    mumble_user.contract_kdf_iterations = probe_row.get('kdf_iterations')
+
+
 def _has_alliance_leader_membership(user):
     if not user.is_authenticated:
         return False
@@ -338,12 +378,29 @@ def mumble_manage(request):
         )
         .order_by('server__display_order', 'username')
     )
+    can_manage_contract = request.user.is_superuser
+    if can_manage_contract:
+        probe_rows_by_key = {}
+        for pkid in sorted({mumble_user.user_id for mumble_user in mumble_users}):
+            try:
+                registrations = _CONTROL_CLIENT.probe_pilot_registrations(pkid)
+            except MurmurSyncError as exc:
+                logger.warning('Failed to probe contract data for pkid=%s: %s', pkid, exc)
+                continue
+            for registration in registrations:
+                server_name = registration.get('server_name')
+                probe_rows_by_key[(pkid, server_name)] = registration
+
+        for mumble_user in mumble_users:
+            probe_row = probe_rows_by_key.get((mumble_user.user_id, mumble_user.server.name), {})
+            _apply_probe_contract_view(mumble_user, probe_row)
     return render(
         request,
         'fg/manage.html',
         {
             'mumble_users': mumble_users,
             'can_manage_admin': _can_manage_mumble_admin(request.user),
+            'can_manage_contract': can_manage_contract,
         },
     )
 
@@ -380,4 +437,68 @@ def toggle_admin(request, mumble_user_id):
             request,
             _('Updated %(count)s active Murmur session(s) immediately.') % {'count': synced_sessions},
         )
+    return redirect('mumble:manage')
+
+
+@require_POST
+@login_required
+def sync_contract(request, mumble_user_id):
+    if not request.user.is_superuser:
+        return HttpResponseForbidden()
+
+    mumble_user = get_object_or_404(MumbleUser, pk=mumble_user_id)
+    try:
+        requested_values = {
+            'evepilot_id': _coerce_optional_int(request.POST.get('evepilot_id'), field_name='evepilot_id'),
+            'corporation_id': _coerce_optional_int(request.POST.get('corporation_id'), field_name='corporation_id'),
+            'alliance_id': _coerce_optional_int(request.POST.get('alliance_id'), field_name='alliance_id'),
+            'kdf_iterations': _coerce_optional_int(request.POST.get('kdf_iterations'), field_name='kdf_iterations'),
+        }
+    except MurmurSyncError as exc:
+        messages.error(request, _('Invalid contract metadata: %(error)s') % {'error': exc})
+        return redirect('mumble:manage')
+
+    try:
+        _sync_contract_metadata(
+            mumble_user,
+            requested_by=str(getattr(request.user, 'username', 'unknown')),
+            is_super=True,
+            **requested_values,
+        )
+        registration = _CONTROL_CLIENT.probe_murmur_registration(mumble_user)
+    except MurmurSyncError as exc:
+        logger.warning(
+            'Failed to sync contract metadata for MumbleUser pk=%s on server=%s: %s',
+            mumble_user.pk,
+            mumble_user.server_id,
+            exc,
+        )
+        messages.warning(
+            request,
+            _('Contract metadata update request failed: %(error)s') % {'error': exc},
+        )
+        return redirect('mumble:manage')
+
+    if not registration:
+        messages.warning(
+            request,
+            _('Contract metadata was sent, but probe verification returned no registration row.'),
+        )
+        return redirect('mumble:manage')
+
+    mismatched_fields = [
+        field_name
+        for field_name, expected in requested_values.items()
+        if registration.get(field_name) != expected
+    ]
+    if mismatched_fields:
+        messages.warning(
+            request,
+            _('Contract metadata update did not verify for fields: %(fields)s') % {
+                'fields': ', '.join(sorted(mismatched_fields)),
+            },
+        )
+        return redirect('mumble:manage')
+
+    messages.success(request, _('Contract metadata synchronized for %(user)s.') % {'user': mumble_user.username})
     return redirect('mumble:manage')
