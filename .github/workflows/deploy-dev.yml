@@ -32,7 +32,47 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          from json import JSONDecodeError
           from pathlib import Path
+
+          def _parse_target_payload(raw: str, target_name: str) -> dict:
+              try:
+                  payload = json.loads(raw)
+              except JSONDecodeError:
+                  # Common operator input mistake: literal newlines in "key" JSON string.
+                  key_field = '"key"'
+                  key_index = raw.find(key_field)
+                  if key_index < 0:
+                      raise
+                  colon_index = raw.find(':', key_index + len(key_field))
+                  if colon_index < 0:
+                      raise
+                  quote_start = raw.find('"', colon_index + 1)
+                  if quote_start < 0:
+                      raise
+
+                  i = quote_start + 1
+                  while i < len(raw):
+                      if raw[i] == '"' and raw[i - 1] != '\\':
+                          break
+                      i += 1
+                  if i >= len(raw):
+                      raise
+
+                  key_raw = raw[quote_start + 1:i]
+                  key_escaped = (
+                      key_raw
+                      .replace('\\', '\\\\')
+                      .replace('\r', '\\r')
+                      .replace('\n', '\\n')
+                      .replace('\t', '\\t')
+                  )
+                  repaired = raw[:quote_start + 1] + key_escaped + raw[i:]
+                  payload = json.loads(repaired)
+
+              if not isinstance(payload, dict):
+                  raise SystemExit(f"Secret {target_name} must be a JSON object")
+              return payload
 
           target_name = os.environ.get("DEPLOY_TARGET_NAME", "").strip()
           raw = os.environ.get("DEPLOY_TARGET_JSON", "").strip()
@@ -44,9 +84,7 @@ jobs:
                   f"Create a secret named {target_name} with JSON fields host/user/key."
               )
 
-          payload = json.loads(raw)
-          if not isinstance(payload, dict):
-              raise SystemExit(f"Secret {target_name} must be a JSON object")
+          payload = _parse_target_payload(raw, target_name)
 
           host = str(payload.get("host", "")).strip()
           user = str(payload.get("user", "")).strip()
