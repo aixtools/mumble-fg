@@ -18,6 +18,7 @@ Local convention:
 
 - code repos live under `~/git/<repo>`
 - `~/git` and `~/prj` are treated as equivalent workspace roots
+- session venvs for testing use `~/.venv/codex` when available; otherwise use `~/.venv/<repo-name>`
 
 Project-history convention:
 
