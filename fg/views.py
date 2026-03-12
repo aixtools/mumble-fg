@@ -314,8 +314,8 @@ def mumble_manage(request):
         .select_related('user', 'server')
         .annotate(
             active_session_count=Count(
-                'mumble_sessions',
-                filter=Q(mumble_sessions__is_active=True),
+                'murmur_sessions',
+                filter=Q(murmur_sessions__is_active=True),
                 distinct=True,
             ),
             has_priority_speaker=Exists(active_priority_session),
