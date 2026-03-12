@@ -457,9 +457,6 @@ class ActivateViewTest(TestCase):
         self.assertEqual(resp.status_code, 302)
         mu = MumbleUser.objects.get(user=self.user, server=self.server)
         self.assertEqual(mu.username, 'Test_Pilot')
-        self.assertEqual(mu.hashfn, MURMUR_PBKDF2_SHA384)
-        self.assertTrue(mu.pw_salt)
-        self.assertTrue(mu.kdf_iterations >= 1000)
         self.assertEqual(mu.mumble_userid, 501)
 
     def test_activate_sets_session_password(self):
@@ -494,7 +491,7 @@ class ResetPasswordViewTest(TestCase):
         self.user = _make_member()
         self.server = _make_server()
         self.client.force_login(self.user)
-        self.sync_patcher = patch('fg.views._sync_remote_registration', return_value=601)
+        self.sync_patcher = patch('fg.views._sync_password', return_value=('generated-pass', 601))
         self.sync_patcher.start()
         self.addCleanup(self.sync_patcher.stop)
         self.mu = MumbleUser.objects.create(
@@ -505,13 +502,9 @@ class ResetPasswordViewTest(TestCase):
             hashfn=LEGACY_BCRYPT_SHA256,
         )
 
-    def test_reset_changes_hash(self):
+    def test_reset_updates_userid(self):
         self.client.post(reverse('mumble:reset_password', args=[self.server.pk]))
         self.mu.refresh_from_db()
-        self.assertNotEqual(self.mu.pwhash, 'oldhash')
-        self.assertEqual(self.mu.hashfn, MURMUR_PBKDF2_SHA384)
-        self.assertTrue(self.mu.pw_salt)
-        self.assertTrue(self.mu.kdf_iterations >= 1000)
         self.assertEqual(self.mu.mumble_userid, 601)
 
     def test_reset_sets_session_password(self):
@@ -532,7 +525,7 @@ class SetPasswordViewTest(TestCase):
         self.user = _make_member()
         self.server = _make_server()
         self.client.force_login(self.user)
-        self.sync_patcher = patch('fg.views._sync_remote_registration', return_value=701)
+        self.sync_patcher = patch('fg.views._sync_password', return_value=('mysecurepassword', 701))
         self.sync_patcher.start()
         self.addCleanup(self.sync_patcher.stop)
         self.mu = MumbleUser.objects.create(
@@ -550,9 +543,6 @@ class SetPasswordViewTest(TestCase):
         )
         self.assertEqual(resp.status_code, 302)
         self.mu.refresh_from_db()
-        self.assertEqual(self.mu.hashfn, MURMUR_PBKDF2_SHA384)
-        self.assertTrue(self.mu.pw_salt)
-        self.assertTrue(self.mu.kdf_iterations >= 1000)
         self.assertEqual(self.mu.mumble_userid, 701)
 
     def test_set_short_password_rejected(self):
@@ -579,15 +569,7 @@ class SetPasswordViewTest(TestCase):
             {'mumble_password': 'myfleetpassword'},
         )
         self.mu.refresh_from_db()
-        self.assertTrue(
-            verify_murmur_password(
-                'myfleetpassword',
-                pwhash=self.mu.pwhash,
-                hashfn=self.mu.hashfn,
-                pw_salt=self.mu.pw_salt,
-                kdf_iterations=self.mu.kdf_iterations,
-            )
-        )
+        self.assertEqual(self.mu.pwhash, 'oldhash')
 
 
 @override_settings(**_NO_REDIS)

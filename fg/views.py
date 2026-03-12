@@ -13,9 +13,9 @@ from django.views.decorators.http import require_POST
 from accounts.models import EveCharacter, GroupMembership
 from modules.corporation.core import _user_is_alliance_leader
 from modules.corporation.models import CorporationSettings
-from .passwords import build_murmur_password_record
 from .pilot.control import (
     MumbleSyncError,
+    reset_mumble_password,
     sync_live_admin_membership,
     sync_mumble_registration,
     unregister_mumble_registration,
@@ -28,14 +28,6 @@ logger = logging.getLogger(__name__)
 def _generate_password(length=16):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
-
-
-def _apply_password_record(mumble_user, password):
-    record = build_murmur_password_record(password)
-    mumble_user.pwhash = record['pwhash']
-    mumble_user.hashfn = record['hashfn']
-    mumble_user.pw_salt = record['pw_salt']
-    mumble_user.kdf_iterations = record['kdf_iterations']
 
 
 def _sync_remote_registration(mumble_user, password=None):
@@ -56,6 +48,14 @@ def _unregister_remote_registration(mumble_user):
 def _sync_live_admin_membership(mumble_user):
     return sync_live_admin_membership(
         mumble_user,
+        requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
+    )
+
+
+def _sync_password(mumble_user, password=None):
+    return reset_mumble_password(
+        mumble_user,
+        password=password,
         requested_by=str(getattr(mumble_user.user, 'username', 'unknown')),
     )
 
@@ -164,8 +164,8 @@ def activate(request, server_id):
         username=_get_mumble_username(request.user),
         display_name=_compute_display_name(request.user),
         groups=_compute_groups(request.user, mumble_user=None),
+        pwhash='',
     )
-    _apply_password_record(mumble_user, password)
     mumble_user.save()
     try:
         mumble_userid = _sync_remote_registration(mumble_user, password=password)
@@ -199,10 +199,8 @@ def reset_password(request, server_id):
         return redirect('profile')
 
     password = _generate_password()
-    _apply_password_record(mumble_user, password)
-    mumble_user.save(update_fields=['pwhash', 'hashfn', 'pw_salt', 'kdf_iterations', 'updated_at'])
     try:
-        mumble_userid = _sync_remote_registration(mumble_user, password=password)
+        password, mumble_userid = _sync_password(mumble_user)
     except MumbleSyncError as exc:
         logger.warning(
             'Failed to sync Murmur password reset for MumbleUser pk=%s on server=%s: %s',
@@ -212,7 +210,7 @@ def reset_password(request, server_id):
         )
         messages.warning(
             request,
-            _('Mumble password was reset locally, but Murmur registration sync failed. Resetting again later will retry it.'),
+            _('Mumble password reset request could not complete now. Retrying later will request a new password again.'),
         )
     else:
         if mumble_user.mumble_userid != mumble_userid:
@@ -237,10 +235,8 @@ def set_password(request, server_id):
         messages.error(request, _('Password must be at least 8 characters.'))
         return redirect('profile')
 
-    _apply_password_record(mumble_user, password)
-    mumble_user.save(update_fields=['pwhash', 'hashfn', 'pw_salt', 'kdf_iterations', 'updated_at'])
     try:
-        mumble_userid = _sync_remote_registration(mumble_user, password=password)
+        _, mumble_userid = _sync_password(mumble_user, password=password)
     except MumbleSyncError as exc:
         logger.warning(
             'Failed to sync Murmur custom password for MumbleUser pk=%s on server=%s: %s',
@@ -250,7 +246,7 @@ def set_password(request, server_id):
         )
         messages.warning(
             request,
-            _('Mumble password was updated locally, but Murmur registration sync failed. Setting it again later will retry it.'),
+            _('Mumble password set request could not complete now. Retrying later will re-issue the request.'),
         )
     else:
         if mumble_user.mumble_userid != mumble_userid:

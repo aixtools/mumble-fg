@@ -95,15 +95,37 @@ def _extract_mumble_userid(response: dict[str, Any]) -> int | None:
     return None
 
 
+def _extract_password(response: dict[str, Any]) -> str | None:
+    for key in ('password', 'proposed_password', 'temporary_password', 'recommended_password'):
+        value = response.get(key)
+        if isinstance(value, str) and value:
+            return value
+    payload = response.get('payload')
+    if isinstance(payload, dict):
+        for key in ('password', 'proposed_password', 'temporary_password', 'recommended_password'):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+    status = response.get('status')
+    if isinstance(status, dict):
+        for key in ('password', 'proposed_password', 'temporary_password'):
+            value = status.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
 def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[str, Any]:
-    return {
+    payload = {
         'pkid': mumble_user.user_id,
         'server_name': mumble_user.server.name,
         'username': mumble_user.username,
         'display_name': mumble_user.display_name,
-        'password': password,
         'mumble_userid': mumble_user.mumble_userid,
     }
+    if password is not None:
+        payload['password'] = password
+    return payload
 
 
 def sync_mumble_registration(mumble_user, password=None, *, requested_by: str | None = None) -> int | None:
@@ -154,9 +176,30 @@ def sync_live_admin_membership(mumble_user, *, requested_by: str | None = None) 
     return len(session_ids)
 
 
+def reset_mumble_password(
+    mumble_user,
+    password: str | None = None,
+    *,
+    requested_by: str | None = None,
+) -> tuple[str, int | None]:
+    payload = {
+        'pkid': mumble_user.user_id,
+        'server_name': mumble_user.server.name,
+        'username': mumble_user.username,
+    }
+    if password is not None:
+        payload['password'] = password
+    response = _post_json('/v1/password-reset', payload, requested_by=requested_by)
+    resolved_password = _extract_password(response)
+    if resolved_password is None:
+        raise MumbleSyncError('Control response did not include password')
+    return resolved_password, _extract_mumble_userid(response)
+
+
 __all__ = [
     'MumbleSyncError',
     '_post_json',
+    'reset_mumble_password',
     'sync_live_admin_membership',
     'sync_mumble_registration',
     'unregister_mumble_registration',
