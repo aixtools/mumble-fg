@@ -35,7 +35,7 @@ Default registry mapping in `fg.panels.registry`:
 Resolution order:
 
 1. explicit `host` argument
-2. Django setting `MUMBLE_PANEL_HOST`
+2. Django setting `MURMUR_PANEL_HOST`
 3. `generic`
 
 Custom providers can be registered with:

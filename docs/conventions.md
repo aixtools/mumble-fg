@@ -116,11 +116,11 @@ treated separately from bg model contracts:
 - `mumble` runtime control and UX routes: `mumble_manage`, `toggle-admin`,
   `mumble_control`.
 - permission and session keys: `manage_mumble_admin`, `view_mumble_presence`,
-  `mumble_temp_password_*`.
+  `murmur_temp_password_*`.
 - helper entry points and command utilities: `update_mumble_groups`,
-  `update_all_mumble_groups`, `sync_mumble_registration`, etc.
+  `update_all_mumble_groups`, `sync_murmur_registration`, etc.
 - data objects/fields that already map to existing Murmur db tables:
-  `mumble_userid`, `MumbleUser`, `mumble_control` DB fields.
+  `murmur_userid`, `MumbleUser`, `mumble_control` DB fields.
 
 For bg-facing reverse-relations, the current synced surface is intentionally
 `murmur_registrations` and `murmur_sessions`; fg references should align to those

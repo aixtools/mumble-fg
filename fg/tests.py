@@ -19,7 +19,7 @@ from fg.passwords import (
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
-from fg.pilot.control import BgControlClient, MumbleSyncError, _post_json
+from fg.pilot.control import BgControlClient, MurmurSyncError, _post_json
 from fg.pilot.models import MumbleServer, MumbleSession, MumbleUser
 from fg.views import (
     _PASSWORD_ALPHABET,
@@ -394,7 +394,7 @@ class MumbleSessionModelTest(TestCase):
 
 
 class ControlClientAuthTest(TestCase):
-    @override_settings(MUMBLE_CONTROL_PSK='primary-control-secret')
+    @override_settings(MURMUR_CONTROL_PSK='primary-control-secret')
     @patch('fg.pilot.control.urlopen')
     def test_post_json_sends_control_psk_header(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
@@ -402,9 +402,9 @@ class ControlClientAuthTest(TestCase):
         _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
 
         request = mock_urlopen.call_args.args[0]
-        self.assertEqual(request.get_header('X-mumble-control-psk'), 'primary-control-secret')
+        self.assertEqual(request.get_header('X-murmur-control-psk'), 'primary-control-secret')
 
-    @override_settings(MUMBLE_CONTROL_PSK='', MUMBLE_CONTROL_SHARED_SECRET='fallback-control-secret')
+    @override_settings(MURMUR_CONTROL_PSK='', MURMUR_CONTROL_SHARED_SECRET='fallback-control-secret')
     @patch('fg.pilot.control.urlopen')
     def test_post_json_uses_shared_secret_fallback_header(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
@@ -412,7 +412,7 @@ class ControlClientAuthTest(TestCase):
         _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
 
         request = mock_urlopen.call_args.args[0]
-        self.assertEqual(request.get_header('X-mumble-control-psk'), 'fallback-control-secret')
+        self.assertEqual(request.get_header('X-murmur-control-psk'), 'fallback-control-secret')
 
 
 class LiveAdminSyncTest(TestCase):
@@ -468,11 +468,11 @@ class LiveAdminSyncTest(TestCase):
 
     @patch('fg.pilot.control._post_json')
     def test_invalid_session_id_raises(self, mock_post_json):
-        with self.assertRaises(MumbleSyncError):
+        with self.assertRaises(MurmurSyncError):
             self.control_client.sync_live_admin_membership(self.mu, session_ids=['bad'])
         mock_post_json.assert_not_called()
 
-    @patch('fg.pilot.control.BgControlClient.probe_mumble_registration')
+    @patch('fg.pilot.control.BgControlClient.probe_murmur_registration')
     @patch('fg.pilot.control._post_json')
     def test_probe_fallback_used_when_sync_count_missing(self, mock_post_json, mock_probe):
         mock_post_json.return_value = {'status': 'completed'}
@@ -510,7 +510,7 @@ class ActivateViewTest(TestCase):
     def test_activate_sets_session_password(self):
         self.client.post(reverse('mumble:activate', args=[self.server.pk]))
         session = self.client.session
-        key = f'mumble_temp_password_{self.server.pk}'
+        key = f'murmur_temp_password_{self.server.pk}'
         self.assertIn(key, session)
         pw = session[key]
         self.assertEqual(len(pw), 16)
@@ -558,7 +558,7 @@ class ResetPasswordViewTest(TestCase):
     def test_reset_sets_session_password(self):
         self.client.post(reverse('mumble:reset_password', args=[self.server.pk]))
         session = self.client.session
-        key = f'mumble_temp_password_{self.server.pk}'
+        key = f'murmur_temp_password_{self.server.pk}'
         self.assertIn(key, session)
 
     def test_reset_no_account(self):
@@ -686,7 +686,7 @@ class ToggleAdminViewTest(TestCase):
         self.assertIn('Mumble admin granted for Target_User.', messages)
         self.assertIn('Updated 2 active Murmur session(s) immediately.', messages)
 
-    @patch('fg.views._sync_live_admin_membership', side_effect=MumbleSyncError('boom'))
+    @patch('fg.views._sync_live_admin_membership', side_effect=MurmurSyncError('boom'))
     def test_toggle_admin_keeps_cube_state_when_live_sync_fails(self, mock_sync_live_admin_membership):
         response = self.client.post(
             reverse('mumble:toggle_admin', args=[self.mu.pk]),
@@ -920,7 +920,7 @@ class ProfilePanelProviderTest(TestCase):
     def test_temp_password_is_read_once(self):
         MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')
         request = self._request()
-        request.session[f'mumble_temp_password_{self.server1.pk}'] = 'abc123'
+        request.session[f'murmur_temp_password_{self.server1.pk}'] = 'abc123'
 
         panels1 = build_profile_panels(request)
         panels2 = build_profile_panels(request)
@@ -930,7 +930,7 @@ class ProfilePanelProviderTest(TestCase):
         self.assertEqual(first['temp_password'], 'abc123')
         self.assertIsNone(second['temp_password'])
 
-    @override_settings(MUMBLE_PANEL_HOST='cube')
+    @override_settings(MURMUR_PANEL_HOST='cube')
     def test_host_provider_resolution(self):
         provider = get_profile_panel_provider()
         self.assertEqual(provider.provider_name, 'cube')
@@ -972,7 +972,7 @@ class ProfileContextTest(TestCase):
 
     def test_temp_password_shown_once(self):
         session = self.client.session
-        session[f'mumble_temp_password_{self.server.pk}'] = 'abc123secret'
+        session[f'murmur_temp_password_{self.server.pk}'] = 'abc123secret'
         session.save()
         resp = self.client.get(reverse('profile'))
         self.assertContains(resp, 'abc123secret')

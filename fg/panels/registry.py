@@ -27,7 +27,7 @@ class ProfilePanelProviderRegistry:
         self._factories[key] = factory
 
     def resolve(self, host: str | None = None) -> ProfilePanelProvider:
-        resolved_host = host or getattr(settings, 'MUMBLE_PANEL_HOST', None) or 'generic'
+        resolved_host = host or getattr(settings, 'MURMUR_PANEL_HOST', None) or 'generic'
         key = str(resolved_host).strip().lower() or 'generic'
         factory = self._factories.get(key) or self._factories.get('generic')
         if factory is None:

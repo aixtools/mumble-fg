@@ -1,6 +1,6 @@
 """Control client for fg/bg boundaries.
 
-This module provides a black-box integration point for Mumble control operations.
+This module provides a black-box integration point for Murmur control operations.
 FG should not call background internals directly.
 """
 
@@ -19,20 +19,20 @@ REQUEST_TIMEOUT_SECONDS = 5
 CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:8000'
 
 
-class MumbleSyncError(RuntimeError):
+class MurmurSyncError(RuntimeError):
     """Raised for control transport or rejected operations."""
 
 
 def _control_base_url() -> str:
     return (
-        getattr(settings, 'MUMBLE_CONTROL_URL', None)
-        or getattr(settings, 'MUMBLE_CONTROL_BASE_URL', None)
+        getattr(settings, 'MURMUR_CONTROL_URL', None)
+        or getattr(settings, 'MURMUR_CONTROL_BASE_URL', None)
         or CONTROL_BASE_URL_FALLBACK
     ).rstrip('/')
 
 
 def _control_timeout() -> int:
-    return int(getattr(settings, 'MUMBLE_CONTROL_TIMEOUT_SECONDS', REQUEST_TIMEOUT_SECONDS))
+    return int(getattr(settings, 'MURMUR_CONTROL_TIMEOUT_SECONDS', REQUEST_TIMEOUT_SECONDS))
 
 
 def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
@@ -41,12 +41,12 @@ def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
         headers['Content-Type'] = 'application/json'
 
     shared_secret = (
-        getattr(settings, 'MUMBLE_CONTROL_PSK', None)
-        or getattr(settings, 'MUMBLE_CONTROL_SHARED_SECRET', None)
+        getattr(settings, 'MURMUR_CONTROL_PSK', None)
+        or getattr(settings, 'MURMUR_CONTROL_SHARED_SECRET', None)
         or ''
     ).strip()
     if shared_secret:
-        headers['X-Mumble-Control-PSK'] = shared_secret
+        headers['X-Murmur-Control-PSK'] = shared_secret
     return headers
 
 
@@ -67,10 +67,10 @@ def _decode_json_response(raw: bytes) -> dict[str, Any]:
     try:
         result = json.loads(raw.decode('utf-8'))
     except ValueError as exc:
-        raise MumbleSyncError('Control response was not valid JSON') from exc
+        raise MurmurSyncError('Control response was not valid JSON') from exc
 
     if not isinstance(result, dict):
-        raise MumbleSyncError('Control response shape is invalid')
+        raise MurmurSyncError('Control response shape is invalid')
     return result
 
 
@@ -99,7 +99,7 @@ def _request_json(
         error_reason = str(exc.reason)
         try:
             parsed_error = _decode_json_response(exc.read())
-        except MumbleSyncError:
+        except MurmurSyncError:
             parsed_error = {}
 
         if parsed_error:
@@ -111,9 +111,9 @@ def _request_json(
                 return parsed_error
             error_reason = str(parsed_error.get('message') or parsed_error.get('status') or error_reason)
 
-        raise MumbleSyncError(f'Control request failed ({exc.code}): {error_reason}') from exc
+        raise MurmurSyncError(f'Control request failed ({exc.code}): {error_reason}') from exc
     except URLError as exc:
-        raise MumbleSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
+        raise MurmurSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
 
     result = _decode_json_response(raw)
 
@@ -122,7 +122,7 @@ def _request_json(
     if allow_not_found:
         allowed_statuses.add('not_found')
     if status not in allowed_statuses:
-        raise MumbleSyncError(str(result.get('message', 'control rejected request')))
+        raise MurmurSyncError(str(result.get('message', 'control rejected request')))
 
     return result
 
@@ -135,19 +135,19 @@ def _get_json(path: str, *, allow_not_found: bool = False) -> dict[str, Any]:
     return _request_json(path, method='GET', allow_not_found=allow_not_found)
 
 
-def _extract_mumble_userid(response: dict[str, Any]) -> int | None:
-    for key in ('mumble_userid', 'murmur_userid', 'pkid'):
+def _extract_murmur_userid(response: dict[str, Any]) -> int | None:
+    for key in ('murmur_userid', 'pkid'):
         value = response.get(key)
         if isinstance(value, int):
             return value
     status = response.get('status')
     if isinstance(status, dict):
-        value = status.get('mumble_userid')
+        value = status.get('murmur_userid')
         if isinstance(value, int):
             return value
     payload = response.get('payload')
     if isinstance(payload, dict):
-        value = payload.get('mumble_userid') or payload.get('result')
+        value = payload.get('murmur_userid') or payload.get('result')
         if isinstance(value, int):
             return value
     return None
@@ -179,7 +179,7 @@ def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[
         'server_name': mumble_user.server.name,
         'username': mumble_user.username,
         'display_name': mumble_user.display_name,
-        'mumble_userid': mumble_user.mumble_userid,
+        'murmur_userid': mumble_user.mumble_userid,
     }
     if password is not None:
         payload['password'] = password
@@ -189,7 +189,7 @@ def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[
 class BgControlClient:
     """OO adapter for FG -> BG control and probe endpoints."""
 
-    def sync_mumble_registration(
+    def sync_murmur_registration(
         self,
         mumble_user,
         password: str | None = None,
@@ -201,9 +201,9 @@ class BgControlClient:
             _sync_endpoint_payload(mumble_user, password=password),
             requested_by=requested_by,
         )
-        return _extract_mumble_userid(response)
+        return _extract_murmur_userid(response)
 
-    def unregister_mumble_registration(
+    def unregister_murmur_registration(
         self,
         mumble_user,
         *,
@@ -215,7 +215,7 @@ class BgControlClient:
                 'pkid': mumble_user.user_id,
                 'server_name': mumble_user.server.name,
                 'username': mumble_user.username,
-                'mumble_userid': mumble_user.mumble_userid,
+                'murmur_userid': mumble_user.mumble_userid,
             },
             requested_by=requested_by,
         )
@@ -227,14 +227,14 @@ class BgControlClient:
             return True
         return False
 
-    def probe_mumble_registration(self, mumble_user) -> dict[str, Any] | None:
+    def probe_murmur_registration(self, mumble_user) -> dict[str, Any] | None:
         response = _get_json(f'/v1/pilots/{mumble_user.user_id}', allow_not_found=True)
         if str(response.get('status', '')).lower() == 'not_found':
             return None
 
         registrations = response.get('registrations')
         if not isinstance(registrations, list):
-            raise MumbleSyncError('Probe response did not include registrations')
+            raise MurmurSyncError('Probe response did not include registrations')
 
         for registration in registrations:
             if not isinstance(registration, dict):
@@ -250,7 +250,7 @@ class BgControlClient:
             try:
                 session_id = int(value)
             except (TypeError, ValueError):
-                raise MumbleSyncError(f'Invalid session_id in payload: {value!r}') from None
+                raise MurmurSyncError(f'Invalid session_id in payload: {value!r}') from None
             if session_id > 0:
                 normalized.append(session_id)
         return normalized
@@ -279,7 +279,7 @@ class BgControlClient:
         if isinstance(synced_sessions, int):
             return synced_sessions
 
-        registration = self.probe_mumble_registration(mumble_user)
+        registration = self.probe_murmur_registration(mumble_user)
         if not registration:
             return 0
         active_session_count = registration.get('active_session_count')
@@ -287,7 +287,7 @@ class BgControlClient:
             return active_session_count
         return 0
 
-    def reset_mumble_password(
+    def reset_murmur_password(
         self,
         mumble_user,
         password: str | None = None,
@@ -304,11 +304,11 @@ class BgControlClient:
         response = _post_json('/v1/password-reset', payload, requested_by=requested_by)
         resolved_password = _extract_password(response)
         if resolved_password is None:
-            raise MumbleSyncError('Control response did not include password')
-        return resolved_password, _extract_mumble_userid(response)
+            raise MurmurSyncError('Control response did not include password')
+        return resolved_password, _extract_murmur_userid(response)
 
 
 __all__ = [
-    'MumbleSyncError',
+    'MurmurSyncError',
     'BgControlClient',
 ]

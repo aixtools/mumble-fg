@@ -114,7 +114,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                     template=self.panel_template,
                     server=server,
                     account=account,
-                    temp_password=request.session.pop(f'mumble_temp_password_{server.pk}', None),
+                    temp_password=request.session.pop(f'murmur_temp_password_{server.pk}', None),
                     username_with_slot=username_with_slot,
                     server_label=self._server_label(server),
                     server_hint=self._server_hint(server),
