@@ -20,7 +20,8 @@ Current extracted paths:
 - `fg/tasks.py`
 - `fg/tests.py`
 - `fg/passwords.py`
-- `fg/pilot/`
+- `fg/models.py`
+- `fg/control.py`
 - `fg/integration.py`
 - `fg/panels/`
 - `fg/management/commands/backfill_mumble_display_names.py`
@@ -32,8 +33,8 @@ This split is intentionally incomplete. The Django code here still expects broad
 - `accounts`
 - `modules.corporation`
 - `modules.esi_queue`
-- pilot-side Mumble models exposed through `fg.pilot.models`
-- pilot-side sync helpers exposed through `fg.pilot.control`
+- Murmur contract models resolved through `fg.models`
+- fg/bg control transport through `fg.control`
 
 Those seams should be redesigned explicitly rather than left shared implicitly.
 

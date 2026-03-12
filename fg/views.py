@@ -12,8 +12,8 @@ from django.views.decorators.http import require_POST
 from accounts.models import EveCharacter, GroupMembership
 from modules.corporation.core import _user_is_alliance_leader
 from modules.corporation.models import CorporationSettings
-from .pilot.control import BgControlClient, MurmurSyncError
-from .pilot.models import MumbleServer, MumbleSession, MumbleUser
+from .control import BgControlClient, MurmurSyncError
+from .models import MumbleServer, MumbleSession, MumbleUser
 
 logger = logging.getLogger(__name__)
 _CONTROL_CLIENT = BgControlClient()

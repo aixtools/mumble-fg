@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from fg.pilot.models import MumbleServer, MumbleUser
+from fg.models import MumbleServer, MumbleUser
 
 
 @dataclass(frozen=True)

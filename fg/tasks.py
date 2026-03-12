@@ -1,6 +1,6 @@
 import logging
 
-from .pilot.models import MumbleUser
+from .models import MumbleUser
 from .views import _compute_display_name, _compute_groups
 
 logger = logging.getLogger(__name__)

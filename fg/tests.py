@@ -19,8 +19,8 @@ from fg.passwords import (
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
-from fg.pilot.control import BgControlClient, MurmurSyncError, _post_json
-from fg.pilot.models import MumbleServer, MumbleSession, MumbleUser
+from fg.control import BgControlClient, MurmurSyncError, _post_json
+from fg.models import MumbleServer, MumbleSession, MumbleUser
 from fg.views import (
     _PASSWORD_ALPHABET,
     _generate_password,
@@ -395,7 +395,7 @@ class MumbleSessionModelTest(TestCase):
 
 class ControlClientAuthTest(TestCase):
     @override_settings(MURMUR_CONTROL_PSK='primary-control-secret')
-    @patch('fg.pilot.control.urlopen')
+    @patch('fg.control.urlopen')
     def test_post_json_sends_control_psk_header(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
 
@@ -405,7 +405,7 @@ class ControlClientAuthTest(TestCase):
         self.assertEqual(request.get_header('X-murmur-control-psk'), 'primary-control-secret')
 
     @override_settings(MURMUR_CONTROL_PSK='', MURMUR_CONTROL_SHARED_SECRET='fallback-control-secret')
-    @patch('fg.pilot.control.urlopen')
+    @patch('fg.control.urlopen')
     def test_post_json_uses_shared_secret_fallback_header(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
 
@@ -428,7 +428,7 @@ class LiveAdminSyncTest(TestCase):
             is_mumble_admin=True,
         )
 
-    @patch('fg.pilot.control._post_json')
+    @patch('fg.control._post_json')
     def test_grant_posts_contract_payload(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
 
@@ -443,7 +443,7 @@ class LiveAdminSyncTest(TestCase):
         self.assertEqual(payload['pkid'], self.mu.user_id)
         self.assertNotIn('session_ids', payload)
 
-    @patch('fg.pilot.control._post_json')
+    @patch('fg.control._post_json')
     def test_revoke_posts_contract_payload(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
         self.mu.is_mumble_admin = False
@@ -456,7 +456,7 @@ class LiveAdminSyncTest(TestCase):
         self.assertFalse(payload['admin'])
         self.assertNotIn('session_ids', payload)
 
-    @patch('fg.pilot.control._post_json')
+    @patch('fg.control._post_json')
     def test_explicit_session_ids_are_forwarded(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
 
@@ -466,14 +466,14 @@ class LiveAdminSyncTest(TestCase):
         _, payload = mock_post_json.call_args.args
         self.assertEqual(payload['session_ids'], [17, 18])
 
-    @patch('fg.pilot.control._post_json')
+    @patch('fg.control._post_json')
     def test_invalid_session_id_raises(self, mock_post_json):
         with self.assertRaises(MurmurSyncError):
             self.control_client.sync_live_admin_membership(self.mu, session_ids=['bad'])
         mock_post_json.assert_not_called()
 
-    @patch('fg.pilot.control.BgControlClient.probe_murmur_registration')
-    @patch('fg.pilot.control._post_json')
+    @patch('fg.control.BgControlClient.probe_murmur_registration')
+    @patch('fg.control._post_json')
     def test_probe_fallback_used_when_sync_count_missing(self, mock_post_json, mock_probe):
         mock_post_json.return_value = {'status': 'completed'}
         mock_probe.return_value = {'active_session_count': 4}

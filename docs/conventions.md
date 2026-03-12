@@ -231,10 +231,11 @@ Background package layout:
 Foreground package layout:
 
 - `fg/...` for foreground-owned Django/UI code
-- `fg/pilot/...` for transitional pilot-side seam adapters
+- `fg/models.py` for host-contract model resolution
+- `fg/control.py` for fg/bg control transport
 - `templates/fg/...` for extracted foreground templates
 
-Foreground repo still remains partially transitional.
+Foreground repo still remains partially transitional around host identity/policy inputs.
 
 ## Current Status
 
