@@ -8,12 +8,19 @@ from __future__ import annotations
 
 import json
 import uuid
+import sys
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from django.conf import settings
 from django.utils.timezone import now
+
+WORKSPACE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if WORKSPACE_ROOT not in sys.path:
+    sys.path.insert(0, WORKSPACE_ROOT)
+
+from monitor.monitor.models import MurmurContract
 
 REQUEST_TIMEOUT_SECONDS = 5
 CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:8000'
@@ -173,19 +180,6 @@ def _extract_password(response: dict[str, Any]) -> str | None:
     return None
 
 
-def _normalize_optional_int(value: Any, *, field: str) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        raise MurmurSyncError(f'{field} must be an integer') from None
-
-
 def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[str, Any]:
     payload = {
         'pkid': mumble_user.user_id,
@@ -332,22 +326,22 @@ class BgControlClient:
         requested_by: str | None = None,
         is_super: bool = False,
     ) -> dict[str, int | None]:
+        request_contract = MurmurContract.from_mapping(
+            {
+                'evepilot_id': evepilot_id,
+                'corporation_id': corporation_id,
+                'alliance_id': alliance_id,
+                'kdf_iterations': kdf_iterations,
+            }
+        )
         payload = {
             'pkid': mumble_user.user_id,
             'server_name': mumble_user.server.name,
-            'evepilot_id': _normalize_optional_int(evepilot_id, field='evepilot_id'),
-            'corporation_id': _normalize_optional_int(corporation_id, field='corporation_id'),
-            'alliance_id': _normalize_optional_int(alliance_id, field='alliance_id'),
-            'kdf_iterations': _normalize_optional_int(kdf_iterations, field='kdf_iterations'),
+            **request_contract.as_payload(),
             'is_super': bool(is_super),
         }
         response = _post_json('/v1/registrations/contract-sync', payload, requested_by=requested_by)
-        return {
-            'evepilot_id': _normalize_optional_int(response.get('evepilot_id'), field='evepilot_id'),
-            'corporation_id': _normalize_optional_int(response.get('corporation_id'), field='corporation_id'),
-            'alliance_id': _normalize_optional_int(response.get('alliance_id'), field='alliance_id'),
-            'kdf_iterations': _normalize_optional_int(response.get('kdf_iterations'), field='kdf_iterations'),
-        }
+        return MurmurContract.from_mapping(response).as_payload()
 
 
 __all__ = [
