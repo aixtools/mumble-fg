@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -17,10 +18,12 @@ from fg.passwords import (
     verify_murmur_password,
 )
 from fg.panels import build_profile_panels, get_profile_panel_provider
+from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
 from fg.models import MumbleServer, MumbleSession, MumbleUser
+from fg.runtime import RuntimeRegistration, RuntimeServer
 from fg.views import (
     _PASSWORD_ALPHABET,
     _generate_password,
@@ -439,6 +442,7 @@ class LiveAdminSyncTest(TestCase):
         path, payload = mock_post_json.call_args.args
         self.assertEqual(path, '/v1/admin-membership/sync')
         self.assertTrue(payload['admin'])
+        self.assertEqual(payload['groups'], '')
         self.assertEqual(payload['server_name'], self.server.name)
         self.assertEqual(payload['pkid'], self.mu.user_id)
         self.assertNotIn('session_ids', payload)
@@ -454,16 +458,19 @@ class LiveAdminSyncTest(TestCase):
         path, payload = mock_post_json.call_args.args
         self.assertEqual(path, '/v1/admin-membership/sync')
         self.assertFalse(payload['admin'])
+        self.assertEqual(payload['groups'], '')
         self.assertNotIn('session_ids', payload)
 
     @patch('fg.control._post_json')
     def test_explicit_session_ids_are_forwarded(self, mock_post_json):
         mock_post_json.return_value = {'synced_sessions': 2, 'status': 'completed'}
+        self.mu.groups = 'alpha,admin'
 
         synced_sessions = self.control_client.sync_live_admin_membership(self.mu, session_ids=[17, 18])
 
         self.assertEqual(synced_sessions, 2)
         _, payload = mock_post_json.call_args.args
+        self.assertEqual(payload['groups'], 'alpha,admin')
         self.assertEqual(payload['session_ids'], [17, 18])
 
     @patch('fg.control._post_json')
@@ -824,6 +831,294 @@ class ContractMetadataViewTest(TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+@override_settings(**_NO_REDIS, MURMUR_MODEL_APP_LABEL='missing_app_label')
+class RuntimeFallbackAccountViewsTest(TestCase):
+    def setUp(self):
+        self.user = _make_member('runtimepilot')
+        _make_char(self.user)
+        self.server = RuntimeServer(
+            id=77,
+            name='Runtime Server',
+            address='runtime.example.com:64738',
+        )
+        self.client.force_login(self.user)
+
+    def _registration(self):
+        return RuntimeRegistration(
+            user_id=self.user.pk,
+            server=self.server,
+            username='Test_Pilot',
+            display_name='Test Pilot',
+            mumble_userid=901,
+            groups='corp',
+        )
+
+    @patch('fg.views._sync_remote_registration', return_value=812)
+    @patch('fg.views.get_runtime_service')
+    @patch('fg.views.safe_list_servers')
+    def test_activate_uses_runtime_registration_target_when_models_missing(
+        self,
+        mock_safe_list_servers,
+        mock_get_runtime_service,
+        mock_sync_remote_registration,
+    ):
+        mock_safe_list_servers.return_value = [self.server]
+        mock_get_runtime_service.return_value = SimpleNamespace(
+            registration_for_pilot_server=lambda *_args, **_kwargs: None
+        )
+
+        response = self.client.post(reverse('mumble:activate', args=[self.server.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        synced_registration = mock_sync_remote_registration.call_args.args[0]
+        self.assertIsInstance(synced_registration, RuntimeRegistration)
+        self.assertEqual(synced_registration.user_id, self.user.pk)
+        self.assertEqual(synced_registration.server_id, self.server.pk)
+        self.assertEqual(synced_registration.user, self.user)
+        self.assertIn(f'murmur_temp_password_{self.server.pk}', self.client.session)
+
+    @patch('fg.views._sync_password', return_value=('generated-pass', 601))
+    @patch('fg.views.get_runtime_service')
+    @patch('fg.views.safe_list_servers')
+    def test_reset_password_uses_runtime_registration_when_models_missing(
+        self,
+        mock_safe_list_servers,
+        mock_get_runtime_service,
+        mock_sync_password,
+    ):
+        registration = self._registration()
+        mock_safe_list_servers.return_value = [self.server]
+        mock_get_runtime_service.return_value = SimpleNamespace(
+            registration_for_pilot_server=lambda *_args, **_kwargs: registration
+        )
+
+        response = self.client.post(reverse('mumble:reset_password', args=[self.server.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        synced_registration = mock_sync_password.call_args.args[0]
+        self.assertIsInstance(synced_registration, RuntimeRegistration)
+        self.assertEqual(synced_registration.user, self.user)
+        self.assertEqual(self.client.session[f'murmur_temp_password_{self.server.pk}'], 'generated-pass')
+
+    @patch('fg.views._sync_password', return_value=('longenoughpw', 701))
+    @patch('fg.views.get_runtime_service')
+    @patch('fg.views.safe_list_servers')
+    def test_set_password_uses_runtime_registration_when_models_missing(
+        self,
+        mock_safe_list_servers,
+        mock_get_runtime_service,
+        mock_sync_password,
+    ):
+        registration = self._registration()
+        mock_safe_list_servers.return_value = [self.server]
+        mock_get_runtime_service.return_value = SimpleNamespace(
+            registration_for_pilot_server=lambda *_args, **_kwargs: registration
+        )
+
+        response = self.client.post(
+            reverse('mumble:set_password', args=[self.server.pk]),
+            {'murmur_password': 'longenoughpw'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        synced_registration = mock_sync_password.call_args.args[0]
+        self.assertIsInstance(synced_registration, RuntimeRegistration)
+        self.assertEqual(synced_registration.user, self.user)
+        self.assertEqual(mock_sync_password.call_args.kwargs['password'], 'longenoughpw')
+
+    @patch('fg.views._unregister_remote_registration', return_value=True)
+    @patch('fg.views.get_runtime_service')
+    @patch('fg.views.safe_list_servers')
+    def test_deactivate_uses_runtime_registration_when_models_missing(
+        self,
+        mock_safe_list_servers,
+        mock_get_runtime_service,
+        mock_unregister_remote_registration,
+    ):
+        registration = self._registration()
+        mock_safe_list_servers.return_value = [self.server]
+        mock_get_runtime_service.return_value = SimpleNamespace(
+            registration_for_pilot_server=lambda *_args, **_kwargs: registration
+        )
+
+        response = self.client.post(reverse('mumble:deactivate', args=[self.server.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        synced_registration = mock_unregister_remote_registration.call_args.args[0]
+        self.assertIsInstance(synced_registration, RuntimeRegistration)
+        self.assertEqual(synced_registration.user, self.user)
+
+
+@override_settings(**_NO_REDIS, MURMUR_MODEL_APP_LABEL='missing_app_label')
+class RuntimeFallbackManageViewTest(TestCase):
+    def setUp(self):
+        self.viewer = User.objects.create_superuser('runtimeadmin', 'runtimeadmin@example.com', 'pass')
+        UserProfile.objects.create(user=self.viewer, is_member=True)
+        self.target_user = _make_regular_member('runtime_target')
+        self.server = RuntimeServer(
+            id=83,
+            name='Runtime Admin Server',
+            address='runtime-admin.example.com:64738',
+        )
+        observed_at = timezone.now()
+        self.registration = RuntimeRegistration(
+            user_id=self.target_user.pk,
+            server=self.server,
+            username='Runtime_Target',
+            display_name='Runtime Target',
+            mumble_userid=904,
+            contract_evepilot_id=90000001,
+            contract_corporation_id=98000001,
+            contract_alliance_id=99000001,
+            contract_kdf_iterations=120000,
+            active_session_ids=(41, 42),
+            has_priority_speaker=True,
+            last_authenticated=observed_at - timedelta(minutes=10),
+            last_connected=observed_at - timedelta(minutes=9),
+            last_seen=observed_at - timedelta(minutes=1),
+            last_spoke=observed_at - timedelta(seconds=20),
+        )
+        self.client.force_login(self.viewer)
+
+    @patch('fg.views.safe_registration_inventory')
+    @patch('fg.views.safe_list_servers')
+    def test_manage_view_uses_runtime_inventory_when_models_missing(
+        self,
+        mock_safe_list_servers,
+        mock_safe_registration_inventory,
+    ):
+        mock_safe_list_servers.return_value = [self.server]
+        mock_safe_registration_inventory.return_value = [self.registration]
+
+        response = self.client.get(reverse('mumble:manage'))
+
+        self.assertEqual(response.status_code, 200)
+        mumble_users = list(response.context['mumble_users'])
+        self.assertEqual(len(mumble_users), 1)
+        self.assertEqual(mumble_users[0].user, self.target_user)
+        self.assertEqual(mumble_users[0].active_session_count, 2)
+        self.assertTrue(mumble_users[0].has_priority_speaker)
+        self.assertContains(response, reverse('mumble:toggle_admin_registration', args=[self.target_user.pk, self.server.pk]))
+        self.assertContains(response, reverse('mumble:sync_contract_registration', args=[self.target_user.pk, self.server.pk]))
+
+
+@override_settings(**_NO_REDIS, MURMUR_MODEL_APP_LABEL='missing_app_label')
+class RuntimeFallbackManageActionViewTest(TestCase):
+    def setUp(self):
+        self.superuser = User.objects.create_superuser('runtime_root', 'root@example.com', 'pass')
+        UserProfile.objects.create(user=self.superuser, is_member=True)
+        self.target_user = _make_regular_member('runtime_action_target')
+        self.server = RuntimeServer(
+            id=91,
+            name='Runtime Action Server',
+            address='runtime-action.example.com:64738',
+        )
+
+    def _registration(self, *, is_mumble_admin=False):
+        return RuntimeRegistration(
+            user_id=self.target_user.pk,
+            user=self.target_user,
+            server=self.server,
+            username='Runtime_Action_Target',
+            display_name='Runtime Action Target',
+            is_mumble_admin=is_mumble_admin,
+            groups='admin' if is_mumble_admin else '',
+        )
+
+    @patch('fg.views.safe_registration_inventory')
+    @patch('fg.views.safe_list_servers')
+    @patch('fg.views._sync_live_admin_membership', return_value=3)
+    @patch('fg.views.get_runtime_service')
+    @patch('fg.views._runtime_registration')
+    def test_toggle_admin_registration_uses_runtime_registration_when_models_missing(
+        self,
+        mock_runtime_registration,
+        mock_get_runtime_service,
+        mock_sync_live_admin_membership,
+        mock_safe_list_servers,
+        mock_safe_registration_inventory,
+    ):
+        registration = self._registration()
+        mock_runtime_registration.return_value = registration
+        mock_get_runtime_service.return_value = SimpleNamespace(attach_users=lambda registrations: registrations)
+        mock_safe_list_servers.return_value = [self.server]
+        mock_safe_registration_inventory.return_value = [registration]
+        self.client.force_login(self.superuser)
+
+        response = self.client.post(
+            reverse('mumble:toggle_admin_registration', args=[self.target_user.pk, self.server.pk]),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(registration.is_mumble_admin)
+        self.assertEqual(registration.groups, 'admin')
+        self.assertIs(mock_sync_live_admin_membership.call_args.args[0], registration)
+        messages = [message.message for message in response.context['messages']]
+        self.assertIn('Murmur admin granted for Runtime_Action_Target.', messages)
+
+    def test_legacy_toggle_admin_route_404s_when_models_missing(self):
+        self.client.force_login(self.superuser)
+
+        response = self.client.post(reverse('mumble:toggle_admin', args=[1]))
+
+        self.assertEqual(response.status_code, 404)
+
+    @patch('fg.views.safe_registration_inventory')
+    @patch('fg.views.safe_list_servers')
+    @patch('fg.views._CONTROL_CLIENT.probe_murmur_registration')
+    @patch('fg.views._sync_contract_metadata')
+    @patch('fg.views._runtime_registration')
+    def test_sync_contract_registration_uses_runtime_registration_when_models_missing(
+        self,
+        mock_runtime_registration,
+        mock_sync_contract_metadata,
+        mock_probe_murmur_registration,
+        mock_safe_list_servers,
+        mock_safe_registration_inventory,
+    ):
+        registration = self._registration()
+        mock_runtime_registration.return_value = registration
+        mock_sync_contract_metadata.return_value = {
+            'evepilot_id': 90000001,
+            'corporation_id': 98000001,
+            'alliance_id': 99000001,
+            'kdf_iterations': 120000,
+        }
+        mock_probe_murmur_registration.return_value = {
+            'evepilot_id': 90000001,
+            'corporation_id': 98000001,
+            'alliance_id': 99000001,
+            'kdf_iterations': 120000,
+        }
+        mock_safe_list_servers.return_value = [self.server]
+        mock_safe_registration_inventory.return_value = [registration]
+        self.client.force_login(self.superuser)
+
+        response = self.client.post(
+            reverse('mumble:sync_contract_registration', args=[self.target_user.pk, self.server.pk]),
+            {
+                'evepilot_id': '90000001',
+                'corporation_id': '98000001',
+                'alliance_id': '99000001',
+                'kdf_iterations': '120000',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(mock_sync_contract_metadata.call_args.args[0], registration)
+        messages = [message.message for message in response.context['messages']]
+        self.assertIn('Contract metadata synchronized for Runtime_Action_Target.', messages)
+
+    def test_legacy_sync_contract_route_404s_when_models_missing(self):
+        self.client.force_login(self.superuser)
+
+        response = self.client.post(reverse('mumble:sync_contract', args=[1]), {'evepilot_id': '1'})
+
+        self.assertEqual(response.status_code, 404)
+
+
 @override_settings(**_NO_REDIS)
 class MumbleManagePermissionsViewTest(TestCase):
     def setUp(self):
@@ -1049,6 +1344,81 @@ class ProfilePanelProviderTest(TestCase):
         request = self._request()
         panels = integration.get_profile_panels(request)
         self.assertEqual(len(panels), 2)
+
+
+@override_settings(MURMUR_MODEL_APP_LABEL='missing_app_label')
+class RuntimeFallbackProfilePanelProviderTest(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = _make_member('runtimepaneluser')
+
+    def _request(self):
+        request = self.factory.get('/profile/')
+        request.user = self.user
+        request.session = {}
+        return request
+
+    @patch('fg.panels.providers.safe_pilot_registrations')
+    @patch('fg.panels.providers.safe_list_servers')
+    def test_provider_falls_back_to_runtime_inventory_when_models_missing(
+        self,
+        mock_safe_list_servers,
+        mock_safe_pilot_registrations,
+    ):
+        runtime_server = RuntimeServer(
+            id=41,
+            name='Runtime Server',
+            address='runtime.example.com:64738',
+        )
+        runtime_registration = RuntimeRegistration(
+            user_id=self.user.pk,
+            user=self.user,
+            server=runtime_server,
+            username='Runtime_Pilot',
+            display_name='Runtime Pilot',
+        )
+        mock_safe_list_servers.return_value = [runtime_server]
+        mock_safe_pilot_registrations.return_value = [runtime_registration]
+
+        panels = build_profile_panels(self._request())
+
+        self.assertEqual(len(panels), 1)
+        self.assertEqual(panels[0]['server'].pk, runtime_server.pk)
+        self.assertEqual(panels[0]['account'].username, 'Runtime_Pilot')
+
+
+class CubeExtensionTest(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = _make_member('cubeextuser')
+        self.server = _make_server(name='Cube Server', address='cube.example.com:64738')
+
+    def _request(self):
+        request = self.factory.get('/profile/')
+        request.user = self.user
+        request.session = {}
+        return request
+
+    def test_profile_panels_delegate_to_cube_provider(self):
+        request = self._request()
+
+        panels = get_cube_profile_panels(request)
+
+        self.assertEqual(len(panels), 1)
+        self.assertEqual(panels[0]['server'].pk, self.server.pk)
+
+    def test_i18n_urlpatterns_mount_when_models_available(self):
+        patterns = get_i18n_urlpatterns()
+
+        self.assertEqual(len(patterns), 1)
+
+
+@override_settings(MURMUR_MODEL_APP_LABEL='missing_app_label')
+class CubeExtensionMissingModelsTest(TestCase):
+    def test_i18n_urlpatterns_mount_when_models_missing(self):
+        patterns = get_i18n_urlpatterns()
+
+        self.assertEqual(len(patterns), 1)
 
 
 # ── Profile integration ────────────────────────────────────────────

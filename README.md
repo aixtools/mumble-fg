@@ -21,8 +21,10 @@ Current extracted paths:
 - `fg/tests.py`
 - `fg/passwords.py`
 - `fg/models.py`
+- `fg/host.py`
 - `fg/control.py`
 - `fg/integration.py`
+- `fg/cube_extension.py`
 - `fg/panels/`
 - `fg/management/commands/backfill_mumble_display_names.py`
 - `templates/fg/manage.html`
@@ -34,7 +36,12 @@ This split is intentionally incomplete. The Django code here still expects broad
 - `modules.corporation`
 - `modules.esi_queue`
 - Murmur contract models resolved through `fg.models`
+- host account/permission adapters resolved through `fg.host`
 - fg/bg control transport through `fg.control`
+- Cube extension hooks resolved through `fg.cube_extension`
+
+At runtime, FG now treats host Murmur ORM models as optional. When `MURMUR_MODEL_APP_LABEL`
+does not resolve, profile panels and Murmur management views fall back to BG control/probe APIs.
 
 Those seams should be redesigned explicitly rather than left shared implicitly.
 

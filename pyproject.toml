@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mumble-fg"
+version = "0.1.0.dev0"
+description = "Foreground/UI Murmur integration paired with mumble-bg."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "django>=4.2,<5.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["fg*"]
+
+[tool.setuptools.package-data]
+fg = ["templates/fg/*.html", "templates/fg/panels/*.html"]

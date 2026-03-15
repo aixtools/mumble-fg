@@ -64,6 +64,7 @@ Set these in the host environment used by Django:
 - `MURMUR_CONTROL_URL` (or `MURMUR_CONTROL_BASE_URL`)
 - `MURMUR_CONTROL_PSK` (or `MURMUR_CONTROL_SHARED_SECRET`)
 - `MURMUR_PANEL_HOST` (provider selection key for your host integration)
+- `MURMUR_HOST_ADAPTER` (optional dotted path override for host account/permission adapters)
 - `MURMUR_MODEL_APP_LABEL` (usually `mumble`)
 
 Optional:
@@ -73,10 +74,18 @@ Optional:
 
 ## One-Time Host Wiring Checklist
 
-1. Ensure Django can import FG package code (for example via `PYTHONPATH=<project_dir>`).
-2. Add `<project_dir>/templates` to Django `TEMPLATES[...]["DIRS"]`.
-3. Mount FG URLs in host URLconf.
-4. Register sidebar and profile panel integration from FG integration classes.
+1. Ensure Django can import FG package code (wheel install is preferred; `PYTHONPATH=<project_dir>` also works for source checkouts).
+2. Add `fg.apps.MumbleFgConfig` to Cube `OPTIONAL_APPS` so Cube discovers `fg.cube_extension`.
+3. If you are not installing the package into the host environment, ensure Django can still see FG templates.
+4. Configure `MURMUR_CONTROL_URL` and PSK settings so FG can reach BG control/probe APIs.
+5. Configure `MURMUR_MODEL_APP_LABEL` only if you still have a legacy host Murmur model app and want FG to use it.
+
+For upstream Cube specifically:
+
+- sidebar discovery is automatic from `fg.sidebar`
+- profile panels are discovered through `fg.cube_extension`
+- FG URLs are mounted through Cube `config.extensions`
+- runtime views fall back to BG control/probe APIs when no host Murmur model app is present
 
 ## Post-Deploy Verification
 

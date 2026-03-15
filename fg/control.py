@@ -7,8 +7,8 @@ FG should not call background internals directly.
 from __future__ import annotations
 
 import json
+import os
 import uuid
-import sys
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -16,11 +16,7 @@ from urllib.request import Request, urlopen
 from django.conf import settings
 from django.utils.timezone import now
 
-WORKSPACE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if WORKSPACE_ROOT not in sys.path:
-    sys.path.insert(0, WORKSPACE_ROOT)
-
-from monitor.monitor.models import MurmurContract
+from fg.contracts import MurmurContract
 
 REQUEST_TIMEOUT_SECONDS = 5
 CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:8000'
@@ -196,6 +192,20 @@ def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[
 class BgControlClient:
     """OO adapter for FG -> BG control and probe endpoints."""
 
+    def list_servers(self) -> list[dict[str, Any]]:
+        response = _get_json('/v1/servers')
+        servers = response.get('servers')
+        if not isinstance(servers, list):
+            raise MurmurSyncError('Server probe response did not include servers')
+        return [server for server in servers if isinstance(server, dict)]
+
+    def list_registrations(self) -> list[dict[str, Any]]:
+        response = _get_json('/v1/registrations')
+        registrations = response.get('registrations')
+        if not isinstance(registrations, list):
+            raise MurmurSyncError('Registration probe response did not include registrations')
+        return [registration for registration in registrations if isinstance(registration, dict)]
+
     def sync_murmur_registration(
         self,
         mumble_user,
@@ -274,6 +284,7 @@ class BgControlClient:
             'pkid': mumble_user.user_id,
             'server_name': mumble_user.server.name,
             'admin': bool(mumble_user.is_mumble_admin),
+            'groups': str(getattr(mumble_user, 'groups', '') or ''),
         }
         if session_ids is not None:
             payload['session_ids'] = self._normalize_session_ids(session_ids)

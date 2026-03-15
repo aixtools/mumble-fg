@@ -1,0 +1,129 @@
+"""Settings-driven host adapter helpers for mumble-fg."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Any
+
+from django.conf import settings
+from django.utils.module_loading import import_string
+
+_BUILTIN_HOST_ADAPTERS = {
+    'generic': 'fg.host.GenericMurmurHostAdapter',
+    'cube': 'fg.host.CubeMurmurHostAdapter',
+    'allianceauth': 'fg.host.AllianceAuthMurmurHostAdapter',
+}
+
+
+class GenericMurmurHostAdapter:
+    """Host adapter with no product-specific account or permission assumptions."""
+
+    adapter_name = 'generic'
+
+    def get_main_character(self, user) -> Any | None:
+        return None
+
+    def get_approved_group_memberships(self, user) -> list[Any]:
+        return []
+
+    def user_is_alliance_leader(self, user) -> bool:
+        return False
+
+    def has_alliance_leader_membership(self, user) -> bool:
+        return False
+
+
+class CubeMurmurHostAdapter(GenericMurmurHostAdapter):
+    """Cube-style adapter that resolves optional host integrations lazily."""
+
+    adapter_name = 'cube'
+
+    def _accounts_models_module(self):
+        import accounts.models as accounts_models
+
+        return accounts_models
+
+    def get_main_character(self, user) -> Any | None:
+        try:
+            accounts_models = self._accounts_models_module()
+        except ImportError:
+            return None
+        EveCharacter = getattr(accounts_models, 'EveCharacter', None)
+        if EveCharacter is None:
+            return None
+        return EveCharacter.objects.filter(user=user, is_main=True).first()
+
+    def get_approved_group_memberships(self, user) -> list[Any]:
+        try:
+            accounts_models = self._accounts_models_module()
+        except ImportError:
+            return []
+        GroupMembership = getattr(accounts_models, 'GroupMembership', None)
+        if GroupMembership is None:
+            return []
+        return list(
+            GroupMembership.objects.filter(user=user, status='approved').select_related('group')
+        )
+
+    def user_is_alliance_leader(self, user) -> bool:
+        try:
+            from modules.corporation.core import _user_is_alliance_leader
+        except ImportError:
+            return False
+        return bool(_user_is_alliance_leader(user))
+
+    def has_alliance_leader_membership(self, user) -> bool:
+        if not getattr(user, 'is_authenticated', False):
+            return False
+
+        try:
+            accounts_models = self._accounts_models_module()
+            from modules.corporation.models import CorporationSettings
+        except ImportError:
+            return False
+        GroupMembership = getattr(accounts_models, 'GroupMembership', None)
+        if GroupMembership is None:
+            return False
+
+        alliance_groups = CorporationSettings.load().alliance_leader_groups.all()
+        if not alliance_groups:
+            return False
+
+        return GroupMembership.objects.filter(
+            user=user,
+            status='approved',
+            group__in=alliance_groups,
+        ).exists()
+
+
+class AllianceAuthMurmurHostAdapter(GenericMurmurHostAdapter):
+    """Placeholder adapter for AllianceAuth-style hosts."""
+
+    adapter_name = 'allianceauth'
+
+
+def _configured_host_adapter_path() -> str:
+    explicit_adapter = str(getattr(settings, 'MURMUR_HOST_ADAPTER', '') or '').strip()
+    if explicit_adapter:
+        return explicit_adapter
+
+    host = str(getattr(settings, 'MURMUR_PANEL_HOST', '') or 'cube').strip().lower() or 'cube'
+    return _BUILTIN_HOST_ADAPTERS.get(host, _BUILTIN_HOST_ADAPTERS['cube'])
+
+
+@lru_cache(maxsize=None)
+def _build_host_adapter(adapter_path: str):
+    adapter_class = import_string(adapter_path)
+    return adapter_class()
+
+
+def get_host_adapter():
+    return _build_host_adapter(_configured_host_adapter_path())
+
+
+__all__ = [
+    'AllianceAuthMurmurHostAdapter',
+    'CubeMurmurHostAdapter',
+    'GenericMurmurHostAdapter',
+    'get_host_adapter',
+]

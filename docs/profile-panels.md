@@ -12,6 +12,12 @@
 
 Both resolve a provider object via the registry and return panel dicts compatible with host profile panel extension seams.
 
+For Cube hosts using `config.extensions`, `fg.cube_extension.get_profile_panels`
+is the direct hook exposed to the host app.
+
+If `MURMUR_MODEL_APP_LABEL` does not resolve, the generic provider switches from
+host ORM queries to BG probe-backed runtime inventory.
+
 ## Provider Model
 
 Providers implement `ProfilePanelProvider` from `fg.panels.providers`.

@@ -4,16 +4,15 @@ import secrets
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Exists, OuterRef, Q
-from django.http import HttpResponseForbidden
+from django.http import Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 
-from accounts.models import EveCharacter, GroupMembership
-from modules.corporation.core import _user_is_alliance_leader
-from modules.corporation.models import CorporationSettings
 from .control import BgControlClient, MurmurSyncError
-from .models import MumbleServer, MumbleSession, MumbleUser
+from .host import get_host_adapter
+from .models import MumbleServer, MumbleSession, MumbleUser, MurmurModelLookupError, resolve_murmur_models
+from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers, safe_registration_inventory
 
 logger = logging.getLogger(__name__)
 _CONTROL_CLIENT = BgControlClient()
@@ -107,23 +106,73 @@ def _apply_probe_contract_view(mumble_user, probe_row):
     mumble_user.contract_kdf_iterations = probe_row.get('kdf_iterations')
 
 
-def _has_alliance_leader_membership(user):
-    if not user.is_authenticated:
+def _host_murmur_models_available() -> bool:
+    try:
+        resolve_murmur_models()
+    except MurmurModelLookupError:
         return False
+    return True
 
-    alliance_groups = CorporationSettings.load().alliance_leader_groups.all()
-    if not alliance_groups:
-        return False
 
-    return GroupMembership.objects.filter(
+def _resolve_server(server_id):
+    if _host_murmur_models_available():
+        return get_object_or_404(MumbleServer, pk=server_id, is_active=True)
+
+    server = next((server for server in safe_list_servers() if server.pk == int(server_id)), None)
+    if server is None or not server.is_active:
+        raise Http404()
+    return server
+
+
+def _runtime_registration(pkid: int, *, server_id: int):
+    server = next((server for server in safe_list_servers() if server.pk == int(server_id)), None)
+    if server is None:
+        return None
+    try:
+        return get_runtime_service().registration_for_pilot_server(pkid, server_id=server_id, servers=[server])
+    except MurmurSyncError as exc:
+        logger.warning(
+            'Failed to load BG registration for pkid=%s server_id=%s: %s',
+            pkid,
+            server_id,
+            exc,
+        )
+        return None
+
+
+def _user_registration(user, *, server_id: int):
+    if _host_murmur_models_available():
+        return MumbleUser.objects.filter(user=user, server_id=server_id).select_related('user', 'server').first()
+
+    registration = _runtime_registration(user.pk, server_id=server_id)
+    if registration is not None:
+        registration.user = user
+    return registration
+
+
+def _build_registration_target(user, server, *, existing=None):
+    target = RuntimeRegistration(
+        user_id=user.pk,
         user=user,
-        status='approved',
-        group__in=alliance_groups,
-    ).exists()
+        server=server,
+        username=str(getattr(existing, 'username', '') or _get_mumble_username(user)),
+        display_name=str(getattr(existing, 'display_name', '') or _compute_display_name(user)),
+        mumble_userid=getattr(existing, 'mumble_userid', None),
+        is_active=bool(getattr(existing, 'is_active', True)),
+        is_mumble_admin=bool(getattr(existing, 'is_mumble_admin', False)),
+        groups=str(getattr(existing, 'groups', '') or ''),
+    )
+    if not target.groups:
+        target.groups = _compute_groups(user, mumble_user=target)
+    return target
+
+
+def _has_alliance_leader_membership(user):
+    return get_host_adapter().has_alliance_leader_membership(user)
 
 
 def _get_mumble_username(user):
-    main = EveCharacter.objects.filter(user=user, is_main=True).first()
+    main = get_host_adapter().get_main_character(user)
     if main:
         return main.character_name.replace(' ', '_')
     return user.username.replace(' ', '_')
@@ -148,7 +197,7 @@ def _get_ticker(endpoint, label):
 
 def _compute_display_name(user):
     """Build display name like [ALLIANCE.CORP] Character Name."""
-    main = EveCharacter.objects.filter(user=user, is_main=True).first()
+    main = get_host_adapter().get_main_character(user)
     if not main:
         return user.username
 
@@ -179,16 +228,13 @@ def _compute_display_name(user):
 
 def _compute_groups(user, mumble_user=None):
     parts = []
-    main = EveCharacter.objects.filter(user=user, is_main=True).first()
+    main = get_host_adapter().get_main_character(user)
     if main:
         if main.alliance_name:
             parts.append(main.alliance_name.replace(' ', '_'))
         if main.corporation_name:
             parts.append(main.corporation_name.replace(' ', '_'))
-    memberships = GroupMembership.objects.filter(
-        user=user, status='approved'
-    ).select_related('group')
-    for m in memberships:
+    for m in get_host_adapter().get_approved_group_memberships(user):
         parts.append(m.group.name.replace(' ', '_'))
     if mumble_user and mumble_user.is_mumble_admin:
         parts.append('admin')
@@ -198,37 +244,40 @@ def _compute_groups(user, mumble_user=None):
 @require_POST
 @login_required
 def activate(request, server_id):
-    server = get_object_or_404(MumbleServer, pk=server_id, is_active=True)
-
-    if MumbleUser.objects.filter(user=request.user, server=server).exists():
+    server = _resolve_server(server_id)
+    existing_registration = _user_registration(request.user, server_id=server.pk)
+    if existing_registration is not None:
         messages.info(request, _('Murmur account already exists on this server.'))
         return redirect('profile')
 
     password = _generate_password()
-    mumble_user = MumbleUser(
-        user=request.user,
-        server=server,
-        username=_get_mumble_username(request.user),
-        display_name=_compute_display_name(request.user),
-        groups=_compute_groups(request.user, mumble_user=None),
-        pwhash='',
-    )
-    mumble_user.save()
+    mumble_user = _build_registration_target(request.user, server)
+    if _host_murmur_models_available():
+        persisted_user = MumbleUser(
+            user=request.user,
+            server=server,
+            username=mumble_user.username,
+            display_name=mumble_user.display_name,
+            groups=mumble_user.groups,
+            pwhash='',
+        )
+        persisted_user.save()
+        mumble_user = persisted_user
     try:
         murmur_userid = _sync_remote_registration(mumble_user, password=password)
     except MurmurSyncError as exc:
         logger.warning(
             'Failed to provision Murmur registration for MumbleUser pk=%s on server=%s: %s',
-            mumble_user.pk,
+            getattr(mumble_user, 'pk', 'bg-runtime'),
             server.pk,
             exc,
         )
         messages.warning(
             request,
-            _('Murmur account was created locally, but Murmur registration sync failed. Requesting a new password later will retry it.'),
+            _('Murmur registration sync failed. Requesting a new password later will retry it.'),
         )
     else:
-        if mumble_user.mumble_userid != murmur_userid:
+        if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
             mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
         messages.success(request, _('Murmur account created.'))
@@ -239,9 +288,8 @@ def activate(request, server_id):
 @require_POST
 @login_required
 def reset_password(request, server_id):
-    try:
-        mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
-    except MumbleUser.DoesNotExist:
+    mumble_user = _user_registration(request.user, server_id=server_id)
+    if mumble_user is None:
         messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
@@ -260,7 +308,7 @@ def reset_password(request, server_id):
             _('Murmur password reset request could not complete now. Retrying later will request a new password again.'),
         )
     else:
-        if mumble_user.mumble_userid != murmur_userid:
+        if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
             mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
         messages.success(request, _('Murmur password has been reset.'))
@@ -271,9 +319,8 @@ def reset_password(request, server_id):
 @require_POST
 @login_required
 def set_password(request, server_id):
-    try:
-        mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
-    except MumbleUser.DoesNotExist:
+    mumble_user = _user_registration(request.user, server_id=server_id)
+    if mumble_user is None:
         messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
@@ -286,7 +333,7 @@ def set_password(request, server_id):
         return redirect('profile')
 
     try:
-        _, murmur_userid = _sync_password(mumble_user, password=password)
+        resolved_password, murmur_userid = _sync_password(mumble_user, password=password)
     except MurmurSyncError as exc:
         logger.warning(
             'Failed to sync Murmur custom password for MumbleUser pk=%s on server=%s: %s',
@@ -299,7 +346,8 @@ def set_password(request, server_id):
             _('Murmur password set request could not complete now. Retrying later will re-issue the request.'),
         )
     else:
-        if mumble_user.mumble_userid != murmur_userid:
+        del resolved_password
+        if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
             mumble_user.mumble_userid = murmur_userid
             mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
         messages.success(request, _('Murmur password updated.'))
@@ -309,9 +357,8 @@ def set_password(request, server_id):
 @require_POST
 @login_required
 def deactivate(request, server_id):
-    try:
-        mumble_user = MumbleUser.objects.get(user=request.user, server_id=server_id)
-    except MumbleUser.DoesNotExist:
+    mumble_user = _user_registration(request.user, server_id=server_id)
+    if mumble_user is None:
         messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
@@ -330,11 +377,13 @@ def deactivate(request, server_id):
         )
         return redirect('profile')
 
-    try:
-        mumble_user.delete()
-        messages.success(request, _('Murmur account deactivated.'))
-    except MumbleUser.DoesNotExist:
-        messages.error(request, _('No Murmur account found.'))
+    if _host_murmur_models_available():
+        try:
+            mumble_user.delete()
+        except MumbleUser.DoesNotExist:
+            messages.error(request, _('No Murmur account found.'))
+            return redirect('profile')
+    messages.success(request, _('Murmur account deactivated.'))
     return redirect('profile')
 
 
@@ -342,7 +391,11 @@ def _can_manage_mumble(user):
     # Legacy access path retained for now. This should eventually be replaced
     # by explicit Murmur permission checks so presence/admin access flows
     # through one permission model instead of overlapping staff/group gates.
-    return user.is_staff or _user_is_alliance_leader(user) or user.has_perm('mumble.manage_mumble_admin')
+    return (
+        user.is_staff
+        or get_host_adapter().user_is_alliance_leader(user)
+        or user.has_perm('mumble.manage_mumble_admin')
+    )
 
 
 def _can_manage_mumble_admin(user):
@@ -359,27 +412,40 @@ def _can_manage_mumble_admin(user):
 def mumble_manage(request):
     if not _can_manage_mumble(request.user):
         return HttpResponseForbidden()
-    active_priority_session = MumbleSession.objects.filter(
-        mumble_user=OuterRef('pk'),
-        is_active=True,
-        priority_speaker=True,
-    )
-    mumble_users = (
-        MumbleUser.objects
-        .filter(server__is_active=True)
-        .select_related('user', 'server')
-        .annotate(
-            active_session_count=Count(
-                'murmur_sessions',
-                filter=Q(murmur_sessions__is_active=True),
-                distinct=True,
-            ),
-            has_priority_speaker=Exists(active_priority_session),
+    if _host_murmur_models_available():
+        active_priority_session = MumbleSession.objects.filter(
+            mumble_user=OuterRef('pk'),
+            is_active=True,
+            priority_speaker=True,
         )
-        .order_by('server__display_order', 'username')
-    )
+        mumble_users = (
+            MumbleUser.objects
+            .filter(server__is_active=True)
+            .select_related('user', 'server')
+            .annotate(
+                active_session_count=Count(
+                    'murmur_sessions',
+                    filter=Q(murmur_sessions__is_active=True),
+                    distinct=True,
+                ),
+                has_priority_speaker=Exists(active_priority_session),
+            )
+            .order_by('server__display_order', 'username')
+        )
+    else:
+        servers = safe_list_servers()
+        order_map = {server.pk: index for index, server in enumerate(servers)}
+        mumble_users = get_runtime_service().attach_users(
+            safe_registration_inventory(servers=servers)
+        )
+        mumble_users.sort(
+            key=lambda registration: (
+                order_map.get(registration.server_id, 999999),
+                str(getattr(registration, 'username', '') or '').lower(),
+            )
+        )
     can_manage_contract = request.user.is_superuser
-    if can_manage_contract:
+    if can_manage_contract and _host_murmur_models_available():
         probe_rows_by_key = {}
         for pkid in sorted({mumble_user.user_id for mumble_user in mumble_users}):
             try:
@@ -410,10 +476,17 @@ def mumble_manage(request):
 def toggle_admin(request, mumble_user_id):
     if not _can_manage_mumble_admin(request.user):
         return HttpResponseForbidden()
+    if not _host_murmur_models_available():
+        raise Http404()
     mumble_user = get_object_or_404(MumbleUser, pk=mumble_user_id)
+    return _toggle_admin_for_registration(request, mumble_user)
+
+
+def _toggle_admin_for_registration(request, mumble_user):
     mumble_user.is_mumble_admin = not mumble_user.is_mumble_admin
     mumble_user.groups = _compute_groups(mumble_user.user, mumble_user=mumble_user)
-    mumble_user.save(update_fields=['is_mumble_admin', 'groups', 'updated_at'])
+    if _host_murmur_models_available() and hasattr(mumble_user, 'save'):
+        mumble_user.save(update_fields=['is_mumble_admin', 'groups', 'updated_at'])
     synced_sessions = 0
     try:
         synced_sessions = _sync_live_admin_membership(mumble_user)
@@ -426,7 +499,7 @@ def toggle_admin(request, mumble_user_id):
         )
         messages.warning(
             request,
-            _('Admin status was updated locally, but live Murmur session sync failed. Connected users may need to reconnect.'),
+            _('Admin status was updated, but live Murmur session sync failed. Connected users may need to reconnect.'),
         )
     status = _('granted') if mumble_user.is_mumble_admin else _('revoked')
     messages.success(request, _('Murmur admin %(status)s for %(user)s.') % {
@@ -442,11 +515,32 @@ def toggle_admin(request, mumble_user_id):
 
 @require_POST
 @login_required
+def toggle_admin_registration(request, pkid: int, server_id: int):
+    if not _can_manage_mumble_admin(request.user):
+        return HttpResponseForbidden()
+    if _host_murmur_models_available():
+        mumble_user = get_object_or_404(MumbleUser, user_id=pkid, server_id=server_id)
+    else:
+        mumble_user = _runtime_registration(pkid, server_id=server_id)
+        if mumble_user is None:
+            raise Http404()
+        mumble_user.user = get_runtime_service().attach_users([mumble_user])[0].user
+    return _toggle_admin_for_registration(request, mumble_user)
+
+
+@require_POST
+@login_required
 def sync_contract(request, mumble_user_id):
     if not request.user.is_superuser:
         return HttpResponseForbidden()
+    if not _host_murmur_models_available():
+        raise Http404()
 
     mumble_user = get_object_or_404(MumbleUser, pk=mumble_user_id)
+    return _sync_contract_for_registration(request, mumble_user)
+
+
+def _sync_contract_for_registration(request, mumble_user):
     try:
         requested_values = {
             'evepilot_id': _coerce_optional_int(request.POST.get('evepilot_id'), field_name='evepilot_id'),
@@ -502,3 +596,17 @@ def sync_contract(request, mumble_user_id):
 
     messages.success(request, _('Contract metadata synchronized for %(user)s.') % {'user': mumble_user.username})
     return redirect('mumble:manage')
+
+
+@require_POST
+@login_required
+def sync_contract_registration(request, pkid: int, server_id: int):
+    if not request.user.is_superuser:
+        return HttpResponseForbidden()
+    if _host_murmur_models_available():
+        mumble_user = get_object_or_404(MumbleUser, user_id=pkid, server_id=server_id)
+    else:
+        mumble_user = _runtime_registration(pkid, server_id=server_id)
+        if mumble_user is None:
+            raise Http404()
+    return _sync_contract_for_registration(request, mumble_user)

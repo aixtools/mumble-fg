@@ -7,7 +7,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from fg.models import MumbleServer, MumbleUser
+from fg.models import MumbleServer, MumbleUser, MurmurModelLookupError
+from fg.runtime import safe_list_servers, safe_pilot_registrations
 
 
 @dataclass(frozen=True)
@@ -56,13 +57,22 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     provider_name = 'generic'
 
     def _active_servers(self):
-        return list(MumbleServer.objects.filter(is_active=True).order_by('display_order', 'name'))
+        try:
+            return list(MumbleServer.objects.filter(is_active=True).order_by('display_order', 'name'))
+        except MurmurModelLookupError:
+            return safe_list_servers()
 
     def _accounts_by_server(self, user_id: int) -> dict[int, Any]:
-        return {
-            mumble_user.server_id: mumble_user
-            for mumble_user in MumbleUser.objects.filter(user_id=user_id).select_related('server')
-        }
+        try:
+            return {
+                mumble_user.server_id: mumble_user
+                for mumble_user in MumbleUser.objects.filter(user_id=user_id).select_related('server')
+            }
+        except MurmurModelLookupError:
+            return {
+                registration.server_id: registration
+                for registration in safe_pilot_registrations(user_id, servers=self._active_servers())
+            }
 
     def _slot_labels(self, accounts_by_server: dict[int, Any]) -> dict[int, str | None]:
         usernames: dict[str, list[int]] = defaultdict(list)

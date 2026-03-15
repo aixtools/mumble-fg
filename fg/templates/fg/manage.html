@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Murmur Admin Management" %} - Pilot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{% trans "Murmur Admin Management" %}</h1>
+</div>
+
+<div style="padding: 0 2rem 2rem;">
+    <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px;">
+        <div style="padding: 12px 16px; border-bottom: 2px solid var(--primary-color); background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%);">
+            <h2 style="color: var(--primary-color); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0;">{% trans "Murmur Users" %}</h2>
+        </div>
+        <div style="padding: 16px;">
+            {% if mumble_users %}
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Pilot Account" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Username" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Display Name" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Server" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Murmur ID" %}</th>
+                        {% if can_manage_contract %}
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "EVE Pilot ID" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Corp ID" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Alliance ID" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "KDF Iterations" %}</th>
+                        {% endif %}
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Last Auth" %}</th>
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Last Connected" %}</th>
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Last Seen" %}</th>
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Last Spoke" %}</th>
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Active Sessions" %}</th>
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Priority Speaker" %}</th>
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Admin" %}</th>
+                        {% if can_manage_admin %}
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Action" %}</th>
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for mu in mumble_users %}
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <td style="padding: 8px; color: var(--text-primary); font-size: 13px;">{{ mu.user.username }} (#{{ mu.user_id }})</td>
+                        <td style="padding: 8px; color: var(--text-primary); font-size: 13px;">{{ mu.username }}</td>
+                        <td style="padding: 8px; color: var(--text-primary); font-size: 13px;">{{ mu.display_name }}</td>
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ mu.server.name }}</td>
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ mu.mumble_userid|default_if_none:"" }}</td>
+                        {% if can_manage_contract %}
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ mu.contract_evepilot_id|default_if_none:"" }}</td>
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ mu.contract_corporation_id|default_if_none:"" }}</td>
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ mu.contract_alliance_id|default_if_none:"" }}</td>
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ mu.contract_kdf_iterations|default_if_none:"" }}</td>
+                        {% endif %}
+                        <td style="padding: 8px; text-align: center; color: var(--text-secondary); font-size: 12px;">{% if mu.last_authenticated %}{{ mu.last_authenticated|date:"Y-m-d H:i:s" }}{% endif %}</td>
+                        <td style="padding: 8px; text-align: center; color: var(--text-secondary); font-size: 12px;">{% if mu.last_connected %}{{ mu.last_connected|date:"Y-m-d H:i:s" }}{% endif %}</td>
+                        <td style="padding: 8px; text-align: center; color: var(--text-secondary); font-size: 12px;">{% if mu.last_seen %}{{ mu.last_seen|date:"Y-m-d H:i:s" }}{% endif %}</td>
+                        <td style="padding: 8px; text-align: center; color: var(--text-secondary); font-size: 12px;">{% if mu.last_spoke %}{{ mu.last_spoke|date:"Y-m-d H:i:s" }}{% endif %}</td>
+                        <td style="padding: 8px; text-align: center; color: var(--text-primary); font-size: 13px;">{{ mu.active_session_count }}</td>
+                        <td style="padding: 8px; text-align: center;">
+                            {% if mu.has_priority_speaker %}
+                                <span style="background: rgba(46,204,113,0.2); color: #2ecc71; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">{% trans "YES" %}</span>
+                            {% endif %}
+                        </td>
+                        <td style="padding: 8px; text-align: center;">
+                            {% if mu.is_mumble_admin %}
+                                <span style="background: rgba(46,204,113,0.2); color: #2ecc71; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">{% trans "YES" %}</span>
+                            {% else %}
+                                <span style="color: var(--text-secondary); font-size: 11px;">{% trans "No" %}</span>
+                            {% endif %}
+                        </td>
+                        {% if can_manage_admin %}
+                        <td style="padding: 8px; text-align: center;">
+                            <form method="post" action="{% url 'mumble:toggle_admin_registration' mu.user_id mu.server_id %}" style="display: inline;">
+                                {% csrf_token %}
+                                {% if mu.is_mumble_admin %}
+                                    <button type="submit" class="btn btn-xs btn-outline" style="color: #e74c3c; border-color: #e74c3c;">{% trans "Revoke Admin" %}</button>
+                                {% else %}
+                                    <button type="submit" class="btn btn-xs btn-outline">{% trans "Grant Admin" %}</button>
+                                {% endif %}
+                            </form>
+                        </td>
+                        {% endif %}
+                    </tr>
+                    {% if can_manage_contract %}
+                    <tr style="border-bottom: 1px solid var(--border-color); background: var(--darker-bg);">
+                        <td colspan="{% if can_manage_admin %}17{% else %}16{% endif %}" style="padding: 8px 8px 12px;">
+                            <form method="post" action="{% url 'mumble:sync_contract_registration' mu.user_id mu.server_id %}" style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                                {% csrf_token %}
+                                <input type="number" name="evepilot_id" placeholder="{% trans 'EVE pilot ID' %}" value="{{ mu.contract_evepilot_id|default_if_none:'' }}" style="width: 10rem; padding: 0.35rem 0.5rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.8rem;">
+                                <input type="number" name="corporation_id" placeholder="{% trans 'Corp ID' %}" value="{{ mu.contract_corporation_id|default_if_none:'' }}" style="width: 10rem; padding: 0.35rem 0.5rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.8rem;">
+                                <input type="number" name="alliance_id" placeholder="{% trans 'Alliance ID' %}" value="{{ mu.contract_alliance_id|default_if_none:'' }}" style="width: 10rem; padding: 0.35rem 0.5rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.8rem;">
+                                <input type="number" name="kdf_iterations" placeholder="{% trans 'KDF iterations' %}" value="{{ mu.contract_kdf_iterations|default_if_none:'' }}" style="width: 10rem; padding: 0.35rem 0.5rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.8rem;">
+                                <button type="submit" class="btn btn-xs btn-outline">{% trans "Sync Contract Metadata" %}</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+                <p style="color: var(--text-secondary); font-size: 13px; margin: 0;">{% trans "No active Murmur users found." %}</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

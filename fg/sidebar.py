@@ -1,6 +1,6 @@
 from django.utils.translation import gettext_lazy as _
 
-from modules.corporation.core import _user_is_alliance_leader
+from .host import get_host_adapter
 
 
 def _can_manage_mumble(request):
@@ -8,7 +8,7 @@ def _can_manage_mumble(request):
         return False
     return (
         request.user.is_staff
-        or _user_is_alliance_leader(request.user)
+        or get_host_adapter().user_is_alliance_leader(request.user)
         or request.user.has_perm('mumble.manage_mumble_admin')
     )
 
