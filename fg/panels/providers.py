@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from fg.models import MumbleServer, MumbleUser, MurmurModelLookupError
+from fg.models import MumbleUser, MurmurModelLookupError
 from fg.runtime import safe_list_servers, safe_pilot_registrations
 
 
@@ -57,10 +57,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     provider_name = 'generic'
 
     def _active_servers(self):
-        try:
-            return list(MumbleServer.objects.filter(is_active=True).order_by('display_order', 'name'))
-        except MurmurModelLookupError:
-            return safe_list_servers()
+        return safe_list_servers()
 
     def _accounts_by_server(self, user_id: int) -> dict[int, Any]:
         try:

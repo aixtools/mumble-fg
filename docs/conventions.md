@@ -215,6 +215,42 @@ Rules:
 - If `MURMUR_PROBE` is absent, normal operation still proceeds over ICE only.
 - `dbengine` and `dbport` may be supplied, but bg should discover them when absent.
 
+## Pilot Eligibility Decision Tables
+
+FG owns the access-control decision tables and pushes them to BG via the control
+channel. BG independently provisions Mumble accounts by evaluating the pilot
+source against these rules.
+
+### Tables (admin-managed in FG, copied to BG via control channel)
+
+- **allowed_access**: alliance IDs — an alliance is either in or out
+- **blocked_access**: corp IDs, pilot IDs — within an allowed alliance
+
+### Precedence (most specific wins)
+
+1. **Pilot allow/block** overrides everything
+2. **Corp block** applies if no pilot-level override exists
+3. **Alliance allow** is the baseline
+
+A blocked corp within an allowed alliance denies that corp's members — but an
+explicit pilot-level allow for a specific member of that corp restores their
+access. This gives admins surgical control: allow an alliance, block a
+problematic corp, but still whitelist specific trusted pilots from that corp.
+
+### Account-wide enforcement
+
+Block checks apply across the **entire account**, not just the main character.
+If the main **or any alt** matches a blocked corp or pilot ID, the whole account
+is denied — unless a pilot-level allow overrides it.
+
+### Ownership
+
+- FG owns the decision tables (admin panel for submitting IDs)
+- FG pushes decision tables to BG via control channel
+- BG stores its own copy and autonomously provisions `bg_user` rows
+- `fg_user` data is generated dynamically on request, not persisted for sync
+- FG periodic sync only ensures BG has the latest decision tables
+
 ## Packaging / Layout
 
 Background package layout:

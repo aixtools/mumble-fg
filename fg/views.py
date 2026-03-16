@@ -1,33 +1,30 @@
+import json
 import logging
-import secrets
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Exists, OuterRef, Q
-from django.http import Http404, HttpResponseForbidden
+from django.http import Http404, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 
 from .control import BgControlClient, MurmurSyncError
 from .host import get_host_adapter
-from .models import MumbleServer, MumbleSession, MumbleUser, MurmurModelLookupError, resolve_murmur_models
+from .models import (
+    AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT,
+    MumbleUser, MurmurModelLookupError, resolve_murmur_models,
+)
 from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers, safe_registration_inventory
 
 logger = logging.getLogger(__name__)
 _CONTROL_CLIENT = BgControlClient()
 
-_FORBIDDEN_PASSWORD_CHARS = {"'", '"', '`', '\\'}
-_PASSWORD_ALPHABET = ''.join(
-    chr(code) for code in range(33, 127) if chr(code) not in _FORBIDDEN_PASSWORD_CHARS
-)
-
-
-def _generate_password(length=16):
-    return ''.join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+_FORBIDDEN_PASSWORD_CHARS = frozenset({"'", '"', '`', '\\'})
 
 
 def _password_has_supported_chars(password):
+    """Validate user-provided password before sending to BG for hashing."""
     for ch in password:
         if ord(ch) < 33 or ord(ch) > 126:
             return False
@@ -115,9 +112,6 @@ def _host_murmur_models_available() -> bool:
 
 
 def _resolve_server(server_id):
-    if _host_murmur_models_available():
-        return get_object_or_404(MumbleServer, pk=server_id, is_active=True)
-
     server = next((server for server in safe_list_servers() if server.pk == int(server_id)), None)
     if server is None or not server.is_active:
         raise Http404()
@@ -250,7 +244,6 @@ def activate(request, server_id):
         messages.info(request, _('Murmur account already exists on this server.'))
         return redirect('profile')
 
-    password = _generate_password()
     mumble_user = _build_registration_target(request.user, server)
     if _host_murmur_models_available():
         persisted_user = MumbleUser(
@@ -264,7 +257,7 @@ def activate(request, server_id):
         persisted_user.save()
         mumble_user = persisted_user
     try:
-        murmur_userid = _sync_remote_registration(mumble_user, password=password)
+        murmur_userid = _sync_remote_registration(mumble_user)
     except MurmurSyncError as exc:
         logger.warning(
             'Failed to provision Murmur registration for MumbleUser pk=%s on server=%s: %s',
@@ -276,12 +269,19 @@ def activate(request, server_id):
             request,
             _('Murmur registration sync failed. Requesting a new password later will retry it.'),
         )
-    else:
-        if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
-            mumble_user.mumble_userid = murmur_userid
-            mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Murmur account created.'))
-    request.session[f'murmur_temp_password_{server_id}'] = password
+        return redirect('profile')
+
+    if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
+        mumble_user.mumble_userid = murmur_userid
+        mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
+
+    # Request initial password from BG (BG generates it).
+    try:
+        password, _ = _sync_password(mumble_user)
+        request.session[f'murmur_temp_password_{server_id}'] = password
+    except MurmurSyncError:
+        logger.warning('Initial password request failed for new registration on server=%s', server.pk)
+    messages.success(request, _('Murmur account created.'))
     return redirect('profile')
 
 
@@ -293,7 +293,6 @@ def reset_password(request, server_id):
         messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
-    password = _generate_password()
     try:
         password, murmur_userid = _sync_password(mumble_user)
     except MurmurSyncError as exc:
@@ -307,11 +306,12 @@ def reset_password(request, server_id):
             request,
             _('Murmur password reset request could not complete now. Retrying later will request a new password again.'),
         )
-    else:
-        if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
-            mumble_user.mumble_userid = murmur_userid
-            mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Murmur password has been reset.'))
+        return redirect('profile')
+
+    if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
+        mumble_user.mumble_userid = murmur_userid
+        mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
+    messages.success(request, _('Murmur password has been reset.'))
     request.session[f'murmur_temp_password_{server_id}'] = password
     return redirect('profile')
 
@@ -412,40 +412,19 @@ def _can_manage_mumble_admin(user):
 def mumble_manage(request):
     if not _can_manage_mumble(request.user):
         return HttpResponseForbidden()
-    if _host_murmur_models_available():
-        active_priority_session = MumbleSession.objects.filter(
-            mumble_user=OuterRef('pk'),
-            is_active=True,
-            priority_speaker=True,
+    servers = safe_list_servers()
+    order_map = {server.pk: index for index, server in enumerate(servers)}
+    mumble_users = get_runtime_service().attach_users(
+        safe_registration_inventory(servers=servers)
+    )
+    mumble_users.sort(
+        key=lambda registration: (
+            order_map.get(registration.server_id, 999999),
+            str(getattr(registration, 'username', '') or '').lower(),
         )
-        mumble_users = (
-            MumbleUser.objects
-            .filter(server__is_active=True)
-            .select_related('user', 'server')
-            .annotate(
-                active_session_count=Count(
-                    'murmur_sessions',
-                    filter=Q(murmur_sessions__is_active=True),
-                    distinct=True,
-                ),
-                has_priority_speaker=Exists(active_priority_session),
-            )
-            .order_by('server__display_order', 'username')
-        )
-    else:
-        servers = safe_list_servers()
-        order_map = {server.pk: index for index, server in enumerate(servers)}
-        mumble_users = get_runtime_service().attach_users(
-            safe_registration_inventory(servers=servers)
-        )
-        mumble_users.sort(
-            key=lambda registration: (
-                order_map.get(registration.server_id, 999999),
-                str(getattr(registration, 'username', '') or '').lower(),
-            )
-        )
+    )
     can_manage_contract = request.user.is_superuser
-    if can_manage_contract and _host_murmur_models_available():
+    if can_manage_contract:
         probe_rows_by_key = {}
         for pkid in sorted({mumble_user.user_id for mumble_user in mumble_users}):
             try:
@@ -610,3 +589,401 @@ def sync_contract_registration(request, pkid: int, server_id: int):
         if mumble_user is None:
             raise Http404()
     return _sync_contract_for_registration(request, mumble_user)
+
+
+# ---------------------------------------------------------------------------
+# Mumble ACL (user-facing access control list)
+# ---------------------------------------------------------------------------
+
+def _can_view_acl(user):
+    return user.is_authenticated and (
+        user.is_staff
+        or user.has_perm('mumble_fg.view_accessrule')
+        or get_host_adapter().user_is_alliance_leader(user)
+    )
+
+
+def _can_edit_acl(user):
+    return user.is_authenticated and (
+        user.is_staff
+        or user.has_perm('mumble_fg.change_accessrule')
+        or get_host_adapter().user_is_alliance_leader(user)
+    )
+
+
+def _resolve_name_for_rule(rule):
+    """Resolve an entity name for display. Returns the name or '-'."""
+    from .admin import _get_eve_character_model, _get_db_for_eve
+    EveCharacter = _get_eve_character_model()
+    if EveCharacter is None:
+        return '-'
+    db = _get_db_for_eve() or 'default'
+    if rule.entity_type == ENTITY_TYPE_ALLIANCE:
+        row = EveCharacter.objects.using(db).filter(alliance_id=rule.entity_id).values('alliance_name').first()
+        return (row or {}).get('alliance_name', '-')
+    elif rule.entity_type == ENTITY_TYPE_CORPORATION:
+        row = EveCharacter.objects.using(db).filter(corporation_id=rule.entity_id).values('corporation_name').first()
+        return (row or {}).get('corporation_name', '-')
+    elif rule.entity_type == ENTITY_TYPE_PILOT:
+        row = EveCharacter.objects.using(db).filter(character_id=rule.entity_id).values('character_name').first()
+        return (row or {}).get('character_name', '-')
+    return '-'
+
+
+@login_required
+def acl_list(request):
+    if not _can_view_acl(request.user):
+        return HttpResponseForbidden()
+
+    rules = list(AccessRule.objects.all())
+    for rule in rules:
+        rule.resolved_name = _resolve_name_for_rule(rule)
+
+    can_edit = _can_edit_acl(request.user)
+    return render(request, 'fg/acl.html', {
+        'rules': rules,
+        'can_edit': can_edit,
+        'search_url': reverse('mumble:acl_search'),
+        'batch_url': reverse('mumble:acl_batch_create'),
+        'eligible_url': reverse('mumble:acl_eligible'),
+        'blocked_url': reverse('mumble:acl_blocked'),
+    })
+
+
+@login_required
+def acl_search(request):
+    if not _can_view_acl(request.user):
+        return JsonResponse({'error': 'Forbidden'}, status=403)
+
+    from .admin import _search_eve_entities
+    query = request.GET.get('q', '').strip()
+    entity_type = request.GET.get('type', '').strip() or None
+    if entity_type and entity_type not in (ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT):
+        entity_type = None
+    results = _search_eve_entities(query, entity_type=entity_type)
+    return JsonResponse({'results': results})
+
+
+@require_POST
+@login_required
+def acl_batch_create(request):
+    if not _can_edit_acl(request.user):
+        return JsonResponse({'error': 'Forbidden'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    entities = data.get('entities', [])
+    note = (data.get('note') or '').strip()
+    deny = bool(data.get('deny', False))
+    created_by = request.user.get_username()
+
+    if not entities:
+        return JsonResponse({'error': 'No entities provided'}, status=400)
+
+    created = []
+    skipped = []
+    for entry in entities:
+        entity_id = entry.get('entity_id')
+        entity_type = entry.get('entity_type')
+        if not entity_id or entity_type not in (ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT):
+            continue
+        _, was_created = AccessRule.objects.get_or_create(
+            entity_id=entity_id,
+            defaults={
+                'entity_type': entity_type,
+                'deny': deny,
+                'note': note,
+                'created_by': created_by,
+            },
+        )
+        if was_created:
+            created.append(entity_id)
+        else:
+            skipped.append(entity_id)
+
+    return JsonResponse({
+        'created': len(created),
+        'skipped': len(skipped),
+        'skipped_ids': skipped,
+    })
+
+
+def _no_cache_json(data, **kwargs):
+    """Return a JsonResponse with no-cache headers."""
+    response = JsonResponse(data, **kwargs)
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    return response
+
+
+def _acl_rule_sets():
+    """Parse ACL rules into categorised ID sets."""
+    rules = list(AccessRule.objects.all())
+    return {
+        'allowed_alliances': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_ALLIANCE and not r.deny},
+        'denied_alliances': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_ALLIANCE and r.deny},
+        'allowed_corps': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_CORPORATION and not r.deny},
+        'denied_corps': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_CORPORATION and r.deny},
+        'allowed_pilots': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_PILOT and not r.deny},
+        'denied_pilots': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_PILOT and r.deny},
+    }
+
+
+def _eve_char_setup():
+    from .admin import _get_eve_character_model, _get_db_for_eve
+    return _get_eve_character_model(), _get_db_for_eve()
+
+
+def _char_list(queryset):
+    return [
+        {
+            'character_name': c['character_name'],
+            'corporation': c['corporation_name'] or '-',
+            'alliance': c['alliance_name'] or '-',
+        }
+        for c in queryset.values(
+            'character_id', 'character_name', 'corporation_name', 'alliance_name',
+        ).order_by('character_name')
+    ]
+
+
+def _char_list_from_rows(rows):
+    pilots = [
+        {
+            'character_name': row['character_name'],
+            'corporation': row['corporation_name'] or '-',
+            'alliance': row['alliance_name'] or '-',
+        }
+        for row in rows
+    ]
+    pilots.sort(key=lambda pilot: pilot['character_name'].lower())
+    return pilots
+
+
+_DENIAL_REASON_LABELS = {
+    ENTITY_TYPE_ALLIANCE: 'alliance',
+    ENTITY_TYPE_CORPORATION: 'corp',
+    ENTITY_TYPE_PILOT: 'pilot',
+}
+_DENIAL_REASON_RANK = {
+    ENTITY_TYPE_ALLIANCE: 1,
+    ENTITY_TYPE_CORPORATION: 2,
+    ENTITY_TYPE_PILOT: 3,
+}
+
+
+def _denial_reason_detail(reason_type, row):
+    if reason_type == ENTITY_TYPE_PILOT:
+        return row['character_name'] or str(row['character_id'])
+    if reason_type == ENTITY_TYPE_CORPORATION:
+        return row['corporation_name'] or str(row['corporation_id'])
+    return row['alliance_name'] or str(row['alliance_id'])
+
+
+def _prefer_denial_reason(current, candidate):
+    if current is None:
+        return candidate
+    current_type = current['reason_type']
+    candidate_type = candidate['reason_type']
+    if _DENIAL_REASON_RANK[candidate_type] > _DENIAL_REASON_RANK[current_type]:
+        return candidate
+    if _DENIAL_REASON_RANK[candidate_type] < _DENIAL_REASON_RANK[current_type]:
+        return current
+    if candidate['detail'].lower() < current['detail'].lower():
+        return candidate
+    return current
+
+
+def _explicit_rule_match(rs, row):
+    if row['character_id'] in rs['allowed_pilots']:
+        return {'action': 'allow', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)}
+    if row['character_id'] in rs['denied_pilots']:
+        return {'action': 'deny', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)}
+    if row['corporation_id'] in rs['allowed_corps']:
+        return {'action': 'allow', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)}
+    if row['corporation_id'] in rs['denied_corps']:
+        return {'action': 'deny', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)}
+    if row['alliance_id'] in rs['allowed_alliances']:
+        return {'action': 'allow', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)}
+    if row['alliance_id'] in rs['denied_alliances']:
+        return {'action': 'deny', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)}
+    return None
+
+
+def _explicit_rule_matches(rs, row):
+    matches = []
+    if row['character_id'] in rs['allowed_pilots']:
+        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)})
+    if row['character_id'] in rs['denied_pilots']:
+        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)})
+    if row['corporation_id'] in rs['allowed_corps']:
+        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)})
+    if row['corporation_id'] in rs['denied_corps']:
+        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)})
+    if row['alliance_id'] in rs['allowed_alliances']:
+        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)})
+    if row['alliance_id'] in rs['denied_alliances']:
+        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)})
+    return matches
+
+
+def _matching_character_rows(EveCharacter, db, rs):
+    from django.db.models import Q
+
+    q = Q()
+    alliance_ids = rs['allowed_alliances'] | rs['denied_alliances']
+    corp_ids = rs['allowed_corps'] | rs['denied_corps']
+    pilot_ids = rs['allowed_pilots'] | rs['denied_pilots']
+
+    if alliance_ids:
+        q |= Q(alliance_id__in=alliance_ids)
+    if corp_ids:
+        q |= Q(corporation_id__in=corp_ids)
+    if pilot_ids:
+        q |= Q(character_id__in=pilot_ids)
+    if not q:
+        return []
+
+    return list(
+        EveCharacter.objects.using(db)
+        .filter(q, pending_delete=False)
+        .values(
+            'user_id',
+            'character_id',
+            'character_name',
+            'corporation_id',
+            'corporation_name',
+            'alliance_id',
+            'alliance_name',
+        )
+        .order_by('user_id', 'character_name')
+    )
+
+
+def _main_character_rows(EveCharacter, db, user_ids):
+    mains = {}
+    queryset = (
+        EveCharacter.objects.using(db)
+        .filter(user_id__in=user_ids, pending_delete=False)
+        .values(
+            'user_id',
+            'character_id',
+            'character_name',
+            'corporation_name',
+            'alliance_name',
+            'is_main',
+        )
+        .order_by('user_id', '-is_main', 'character_name')
+    )
+    for row in queryset:
+        mains.setdefault(row['user_id'], row)
+    return mains
+
+
+def _blocked_main_list(EveCharacter, db, rs):
+    account_rules = {}
+    for row in _matching_character_rows(EveCharacter, db, rs):
+        matches = _explicit_rule_matches(rs, row)
+        if not matches:
+            continue
+        user_rules = account_rules.setdefault(row['user_id'], {'allow': None, 'deny': None})
+        for match in matches:
+            current = user_rules[match['action']]
+            reason = {
+                'reason_type': match['reason_type'],
+                'detail': match['detail'],
+            }
+            user_rules[match['action']] = _prefer_denial_reason(current, reason)
+
+    blocked_by_user = {
+        user_id: rules['deny']
+        for user_id, rules in account_rules.items()
+        if rules['allow']
+        and rules['deny']
+        and _DENIAL_REASON_RANK[rules['deny']['reason_type']] >= _DENIAL_REASON_RANK[rules['allow']['reason_type']]
+    }
+
+    if not blocked_by_user:
+        return []
+
+    mains = _main_character_rows(EveCharacter, db, blocked_by_user.keys())
+    pilots = []
+    for user_id, reason in blocked_by_user.items():
+        main = mains.get(user_id)
+        if not main:
+            continue
+        denied_as = _DENIAL_REASON_LABELS[reason['reason_type']]
+        denied_detail = reason['detail']
+        character_name = main['character_name']
+        pilots.append(
+            {
+                'character_name': character_name,
+                'display_name': f'{character_name} (denied as: {denied_detail})',
+                'corporation': main['corporation_name'] or '-',
+                'alliance': main['alliance_name'] or '-',
+                'denied_as': denied_as,
+                'denied_detail': denied_detail,
+            }
+        )
+
+    pilots.sort(key=lambda pilot: pilot['character_name'].lower())
+    return pilots
+
+
+@login_required
+def acl_eligible(request):
+    if not _can_view_acl(request.user):
+        return _no_cache_json({'error': 'Forbidden'}, status=403)
+
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None:
+        return _no_cache_json({'error': 'EVE data unavailable'}, status=503)
+
+    rs = _acl_rule_sets()
+    pilots = _char_list_from_rows(
+        row
+        for row in _matching_character_rows(EveCharacter, db, rs)
+        if (_explicit_rule_match(rs, row) or {}).get('action') == 'allow'
+    )
+    return _no_cache_json({'pilots': pilots, 'count': len(pilots)})
+
+
+@login_required
+def acl_blocked(request):
+    """Return blocked accounts as their main pilot plus the most specific deny reason."""
+    if not _can_view_acl(request.user):
+        return _no_cache_json({'error': 'Forbidden'}, status=403)
+
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None:
+        return _no_cache_json({'error': 'EVE data unavailable'}, status=503)
+
+    rs = _acl_rule_sets()
+    pilots = _blocked_main_list(EveCharacter, db, rs)
+    return _no_cache_json({'pilots': pilots, 'count': len(pilots)})
+
+
+@require_POST
+@login_required
+def acl_toggle_deny(request, rule_id):
+    if not _can_edit_acl(request.user):
+        return HttpResponseForbidden()
+
+    rule = get_object_or_404(AccessRule, pk=rule_id)
+    rule.deny = not rule.deny
+    rule.save(update_fields=['deny', 'updated_at'])
+    return redirect('mumble:acl_list')
+
+
+@require_POST
+@login_required
+def acl_delete(request, rule_id):
+    if not _can_edit_acl(request.user):
+        return HttpResponseForbidden()
+
+    rule = get_object_or_404(AccessRule, pk=rule_id)
+    rule.delete()
+    messages.success(request, _('ACL entry deleted.'))
+    return redirect('mumble:acl_list')

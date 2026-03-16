@@ -11,22 +11,14 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import EveCharacter, Group, GroupMembership, UserProfile
-from fg.passwords import (
-    LEGACY_BCRYPT_SHA256,
-    MURMUR_PBKDF2_SHA384,
-    build_murmur_password_record,
-    verify_murmur_password,
-)
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
-from fg.models import MumbleServer, MumbleSession, MumbleUser
+from fg.models import MumbleUser
 from fg.runtime import RuntimeRegistration, RuntimeServer
 from fg.views import (
-    _PASSWORD_ALPHABET,
-    _generate_password,
     _get_mumble_username,
     _compute_display_name,
     _compute_groups,
@@ -54,6 +46,8 @@ class _JsonResponseStub:
 
 
 def _make_server(**kwargs):
+    from fg.models import resolve_murmur_model
+    MumbleServer = resolve_murmur_model('MumbleServer')
     defaults = dict(
         name='Test Server',
         address='mumble.example.com:64738',
@@ -98,50 +92,6 @@ def _grant_alliance_leader_group(user):
     settings = CorporationSettings.load()
     settings.alliance_leader_groups.add(group)
     return group
-
-
-class GeneratePasswordTest(TestCase):
-    def test_default_length(self):
-        pw = _generate_password()
-        self.assertEqual(len(pw), 16)
-
-    def test_custom_length(self):
-        pw = _generate_password(length=32)
-        self.assertEqual(len(pw), 32)
-
-    def test_supported_ascii_charset_only(self):
-        pw = _generate_password(length=200)
-        self.assertTrue(all(ch in _PASSWORD_ALPHABET for ch in pw))
-
-    def test_unique(self):
-        passwords = {_generate_password() for _ in range(50)}
-        self.assertEqual(len(passwords), 50)
-
-
-class MurmurPasswordHashTest(TestCase):
-    def test_round_trip(self):
-        record = build_murmur_password_record('fleetpass123')
-        self.assertEqual(record['hashfn'], MURMUR_PBKDF2_SHA384)
-        self.assertTrue(record['pw_salt'])
-        self.assertTrue(record['kdf_iterations'] >= 1000)
-        self.assertTrue(
-            verify_murmur_password(
-                'fleetpass123',
-                pwhash=record['pwhash'],
-                hashfn=record['hashfn'],
-                pw_salt=record['pw_salt'],
-                kdf_iterations=record['kdf_iterations'],
-            )
-        )
-        self.assertFalse(
-            verify_murmur_password(
-                'wrongpass',
-                pwhash=record['pwhash'],
-                hashfn=record['hashfn'],
-                pw_salt=record['pw_salt'],
-                kdf_iterations=record['kdf_iterations'],
-            )
-        )
 
 
 class GetMumbleUsernameTest(TestCase):
@@ -250,19 +200,6 @@ class ComputeDisplayNameTest(TestCase):
 
 # ── Model ───────────────────────────────────────────────────────────
 
-class MumbleServerModelTest(TestCase):
-    def test_str(self):
-        server = _make_server(name='Fleet Comms')
-        self.assertEqual(str(server), 'Fleet Comms')
-
-    def test_ordering(self):
-        s2 = _make_server(name='Bravo', display_order=2)
-        s1 = _make_server(name='Alpha', display_order=1, address='a.example.com:64738')
-        servers = list(MumbleServer.objects.all())
-        self.assertEqual(servers[0], s1)
-        self.assertEqual(servers[1], s2)
-
-
 class MumbleModelTest(TestCase):
     def setUp(self):
         self.server = _make_server()
@@ -270,16 +207,16 @@ class MumbleModelTest(TestCase):
     def test_str(self):
         user = User.objects.create_user('testuser', password='pass')
         mu = MumbleUser.objects.create(
-            user=user, server=self.server, username='Test_Pilot', pwhash='fakehash'
+            user=user, server=self.server, username='Test_Pilot', pwhash=''
         )
         self.assertEqual(str(mu), 'Test_Pilot')
 
     def test_defaults(self):
         user = User.objects.create_user('testuser', password='pass')
         mu = MumbleUser.objects.create(
-            user=user, server=self.server, username='Test_Pilot', pwhash='fakehash'
+            user=user, server=self.server, username='Test_Pilot', pwhash=''
         )
-        self.assertEqual(mu.hashfn, MURMUR_PBKDF2_SHA384)
+        self.assertEqual(mu.hashfn, 'murmur-pbkdf2-sha384')
         self.assertEqual(mu.pw_salt, '')
         self.assertIsNone(mu.kdf_iterations)
         self.assertIsNone(mu.mumble_userid)
@@ -333,67 +270,6 @@ class MumbleModelTest(TestCase):
             Permission.objects.filter(content_type=content_type).values_list('codename', flat=True)
         )
         self.assertIn('manage_mumble_admin', codenames)
-
-
-class MumbleSessionModelTest(TestCase):
-    def setUp(self):
-        self.server = _make_server()
-
-    def test_str(self):
-        user = User.objects.create_user('pulseuser', password='pass')
-        mumble_user = MumbleUser.objects.create(
-            user=user,
-            server=self.server,
-            username='Pulse_User',
-            pwhash='h',
-        )
-        session = MumbleSession.objects.create(
-            server=self.server,
-            mumble_user=mumble_user,
-            session_id=91,
-            username='Pulse_User',
-            connected_at=timezone.now(),
-            last_seen=timezone.now(),
-            last_state=timezone.now(),
-        )
-        self.assertEqual(str(session), 'Test Server:Pulse_User#91')
-
-    def test_unique_active_session(self):
-        user = User.objects.create_user('pulseuser', password='pass')
-        mumble_user = MumbleUser.objects.create(
-            user=user,
-            server=self.server,
-            username='Pulse_User',
-            pwhash='h',
-        )
-        MumbleSession.objects.create(
-            server=self.server,
-            mumble_user=mumble_user,
-            session_id=91,
-            username='Pulse_User',
-            connected_at=timezone.now(),
-            last_seen=timezone.now(),
-            last_state=timezone.now(),
-        )
-        from django.db import IntegrityError
-        with self.assertRaises(IntegrityError):
-            MumbleSession.objects.create(
-                server=self.server,
-                mumble_user=mumble_user,
-                session_id=91,
-                username='Pulse_User',
-                connected_at=timezone.now(),
-                last_seen=timezone.now(),
-                last_state=timezone.now(),
-            )
-
-    def test_custom_permissions_exist(self):
-        content_type = ContentType.objects.get_for_model(MumbleSession)
-        codenames = set(
-            Permission.objects.filter(content_type=content_type).values_list('codename', flat=True)
-        )
-        self.assertIn('view_mumble_presence', codenames)
-        self.assertIn('view_mumble_presence_history', codenames)
 
 
 class ControlClientAuthTest(TestCase):
@@ -601,8 +477,7 @@ class ResetPasswordViewTest(TestCase):
             user=self.user,
             server=self.server,
             username='Test_Pilot',
-            pwhash='oldhash',
-            hashfn=LEGACY_BCRYPT_SHA256,
+            pwhash='',
         )
 
     def test_reset_updates_userid(self):
@@ -635,8 +510,7 @@ class SetPasswordViewTest(TestCase):
             user=self.user,
             server=self.server,
             username='Test_Pilot',
-            pwhash='oldhash',
-            hashfn=LEGACY_BCRYPT_SHA256,
+            pwhash='',
         )
 
     def test_set_valid_password(self):
@@ -1155,98 +1029,6 @@ class MumbleManagePermissionsViewTest(TestCase):
         self.assertContains(response, 'Sync Contract Metadata')
 
 
-@override_settings(**_NO_REDIS)
-class MumbleManagePresenceColumnsViewTest(TestCase):
-    def setUp(self):
-        self.viewer = _make_member('presenceviewer')
-        self.client.force_login(self.viewer)
-        self.server = _make_server()
-        self.target_user = _make_regular_member('cubepilot')
-        observed_at = timezone.now()
-        self.mu = MumbleUser.objects.create(
-            user=self.target_user,
-            server=self.server,
-            username='Translated_Pilot',
-            display_name='Translated Pilot',
-            pwhash='h',
-            mumble_userid=904,
-            last_authenticated=observed_at - timedelta(minutes=10),
-            last_connected=observed_at - timedelta(minutes=9),
-            last_seen=observed_at - timedelta(minutes=1),
-            last_spoke=observed_at - timedelta(seconds=20),
-        )
-        MumbleSession.objects.create(
-            server=self.server,
-            mumble_user=self.mu,
-            session_id=41,
-            mumble_userid=904,
-            username='Translated_Pilot',
-            channel_id=7,
-            priority_speaker=True,
-            connected_at=observed_at - timedelta(minutes=9),
-            last_seen=observed_at - timedelta(minutes=1),
-            last_state=observed_at - timedelta(minutes=1),
-            last_spoke=observed_at - timedelta(seconds=20),
-        )
-        MumbleSession.objects.create(
-            server=self.server,
-            mumble_user=self.mu,
-            session_id=42,
-            mumble_userid=904,
-            username='Translated_Pilot',
-            channel_id=8,
-            priority_speaker=False,
-            connected_at=observed_at - timedelta(minutes=8),
-            last_seen=observed_at - timedelta(minutes=1),
-            last_state=observed_at - timedelta(minutes=1),
-            last_spoke=observed_at - timedelta(seconds=45),
-        )
-
-    def test_manage_view_exposes_presence_columns(self):
-        response = self.client.get(reverse('mumble:manage'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Pilot Account')
-        self.assertContains(response, 'Murmur ID')
-        self.assertContains(response, 'Last Auth')
-        self.assertContains(response, 'Last Connected')
-        self.assertContains(response, 'Last Seen')
-        self.assertContains(response, 'Last Spoke')
-        self.assertContains(response, 'Active Sessions')
-        self.assertContains(response, 'Priority Speaker')
-        self.assertContains(response, f'cubepilot (#{self.target_user.pk})')
-
-        mumble_users = list(response.context['mumble_users'])
-        self.assertEqual(len(mumble_users), 1)
-        self.assertEqual(mumble_users[0].active_session_count, 2)
-        self.assertTrue(mumble_users[0].has_priority_speaker)
-        self.assertContains(response, 'YES', count=1)
-
-    def test_staff_alliance_leader_can_view_action_column(self):
-        viewer = _make_member('leaderstaff')
-        _grant_alliance_leader_group(viewer)
-        self.client.force_login(viewer)
-
-        response = self.client.get(reverse('mumble:manage'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Action')
-        self.assertContains(response, 'Grant Admin')
-
-    def test_perm_only_user_can_view_action_column(self):
-        viewer = _make_regular_member('permviewer')
-        _make_char(viewer)
-        permission = Permission.objects.get(codename='manage_mumble_admin')
-        viewer.user_permissions.add(permission)
-        self.client.force_login(viewer)
-
-        response = self.client.get(reverse('mumble:manage'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Action')
-        self.assertContains(response, 'Grant Admin')
-
-
 # ── Mumble group sync helpers ───────────────────────────────────────
 
 class TasksTest(TestCase):
@@ -1466,3 +1248,139 @@ class ProfileContextTest(TestCase):
         self.assertEqual(len(data), 2)
         self.assertContains(resp, 'Test Server')
         self.assertContains(resp, 'Server 2')
+
+
+# ── ACL tests ─────────────────────────────────────────────────────
+
+from fg.models import AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT
+
+
+@override_settings(**_NO_REDIS)
+class AccessRuleModelTest(TestCase):
+    def test_create_allow_rule(self):
+        rule = AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE)
+        self.assertFalse(rule.deny)
+        self.assertEqual(str(rule), 'ALLOW alliance 99013537')
+
+    def test_create_deny_rule(self):
+        rule = AccessRule.objects.create(entity_id=98618881, entity_type=ENTITY_TYPE_CORPORATION, deny=True)
+        self.assertTrue(rule.deny)
+        self.assertEqual(str(rule), 'DENY corporation 98618881')
+
+    def test_entity_id_unique(self):
+        AccessRule.objects.create(entity_id=12345678, entity_type=ENTITY_TYPE_PILOT)
+        from django.db import IntegrityError
+        with self.assertRaises(IntegrityError):
+            AccessRule.objects.create(entity_id=12345678, entity_type=ENTITY_TYPE_PILOT)
+
+
+@override_settings(**_NO_REDIS)
+class ACLBatchCreateViewTest(TestCase):
+    def setUp(self):
+        self.user = _make_member()
+        self.user.is_staff = True
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def test_batch_create(self):
+        resp = self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({
+                'entities': [
+                    {'entity_id': 99013537, 'entity_type': 'alliance'},
+                    {'entity_id': 99013941, 'entity_type': 'alliance'},
+                ],
+                'note': 'test batch',
+                'deny': False,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['created'], 2)
+        self.assertEqual(data['skipped'], 0)
+        self.assertEqual(AccessRule.objects.count(), 2)
+
+    def test_batch_create_skips_duplicates(self):
+        AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE)
+        resp = self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({
+                'entities': [{'entity_id': 99013537, 'entity_type': 'alliance'}],
+                'note': '',
+                'deny': False,
+            }),
+            content_type='application/json',
+        )
+        data = resp.json()
+        self.assertEqual(data['created'], 0)
+        self.assertEqual(data['skipped'], 1)
+        self.assertIn(99013537, data['skipped_ids'])
+
+    def test_batch_create_sets_created_by(self):
+        self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({
+                'entities': [{'entity_id': 12345678, 'entity_type': 'pilot'}],
+                'note': '',
+                'deny': False,
+            }),
+            content_type='application/json',
+        )
+        rule = AccessRule.objects.get(entity_id=12345678)
+        self.assertEqual(rule.created_by, self.user.username)
+
+    def test_batch_create_forbidden_for_non_staff(self):
+        self.user.is_staff = False
+        self.user.save()
+        resp = self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({'entities': [{'entity_id': 1, 'entity_type': 'alliance'}], 'deny': False}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+
+@override_settings(**_NO_REDIS)
+class ACLDeleteViewTest(TestCase):
+    def setUp(self):
+        self.user = _make_member()
+        self.user.is_staff = True
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def test_delete_rule(self):
+        rule = AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE)
+        resp = self.client.post(reverse('mumble:acl_delete', args=[rule.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(AccessRule.objects.filter(pk=rule.pk).exists())
+
+    def test_delete_forbidden_for_non_staff(self):
+        rule = AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE)
+        self.user.is_staff = False
+        self.user.save()
+        resp = self.client.post(reverse('mumble:acl_delete', args=[rule.pk]))
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(AccessRule.objects.filter(pk=rule.pk).exists())
+
+
+@override_settings(**_NO_REDIS)
+class ACLListViewTest(TestCase):
+    def setUp(self):
+        self.user = _make_member()
+        self.user.is_staff = True
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def test_list_view(self):
+        AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE, note='test')
+        resp = self.client.get(reverse('mumble:acl_list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.context['rules']), 1)
+        self.assertTrue(resp.context['can_edit'])
+
+    def test_list_forbidden_for_non_staff(self):
+        self.user.is_staff = False
+        self.user.save()
+        resp = self.client.get(reverse('mumble:acl_list'))
+        self.assertEqual(resp.status_code, 403)
