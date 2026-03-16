@@ -190,8 +190,9 @@
                     + '<th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:11px;text-transform:uppercase;">Corporation</th>'
                     + '<th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:11px;text-transform:uppercase;">Alliance</th></tr>';
                 data.pilots.forEach(function(p) {
+                    var pilotName = p.display_name || p.character_name;
                     html += '<tr style="border-bottom:1px solid var(--border-color);">'
-                        + '<td style="padding:6px 8px;color:var(--text-primary);font-size:13px;">' + escapeH(p.character_name) + '</td>'
+                        + '<td style="padding:6px 8px;color:var(--text-primary);font-size:13px;">' + escapeH(pilotName) + '</td>'
                         + '<td style="padding:6px 8px;color:var(--text-secondary);font-size:13px;">' + escapeH(p.corporation) + '</td>'
                         + '<td style="padding:6px 8px;color:var(--text-secondary);font-size:13px;">' + escapeH(p.alliance) + '</td></tr>';
                 });

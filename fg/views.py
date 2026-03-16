@@ -724,6 +724,7 @@ def _acl_rule_sets():
     return {
         'allowed_alliances': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_ALLIANCE and not r.deny},
         'denied_alliances': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_ALLIANCE and r.deny},
+        'allowed_corps': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_CORPORATION and not r.deny},
         'denied_corps': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_CORPORATION and r.deny},
         'allowed_pilots': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_PILOT and not r.deny},
         'denied_pilots': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_PILOT and r.deny},
@@ -748,81 +749,219 @@ def _char_list(queryset):
     ]
 
 
+def _char_list_from_rows(rows):
+    pilots = [
+        {
+            'character_name': row['character_name'],
+            'corporation': row['corporation_name'] or '-',
+            'alliance': row['alliance_name'] or '-',
+        }
+        for row in rows
+    ]
+    pilots.sort(key=lambda pilot: pilot['character_name'].lower())
+    return pilots
+
+
+_DENIAL_REASON_LABELS = {
+    ENTITY_TYPE_ALLIANCE: 'alliance',
+    ENTITY_TYPE_CORPORATION: 'corp',
+    ENTITY_TYPE_PILOT: 'pilot',
+}
+_DENIAL_REASON_RANK = {
+    ENTITY_TYPE_ALLIANCE: 1,
+    ENTITY_TYPE_CORPORATION: 2,
+    ENTITY_TYPE_PILOT: 3,
+}
+
+
+def _denial_reason_detail(reason_type, row):
+    if reason_type == ENTITY_TYPE_PILOT:
+        return row['character_name'] or str(row['character_id'])
+    if reason_type == ENTITY_TYPE_CORPORATION:
+        return row['corporation_name'] or str(row['corporation_id'])
+    return row['alliance_name'] or str(row['alliance_id'])
+
+
+def _prefer_denial_reason(current, candidate):
+    if current is None:
+        return candidate
+    current_type = current['reason_type']
+    candidate_type = candidate['reason_type']
+    if _DENIAL_REASON_RANK[candidate_type] > _DENIAL_REASON_RANK[current_type]:
+        return candidate
+    if _DENIAL_REASON_RANK[candidate_type] < _DENIAL_REASON_RANK[current_type]:
+        return current
+    if candidate['detail'].lower() < current['detail'].lower():
+        return candidate
+    return current
+
+
+def _explicit_rule_match(rs, row):
+    if row['character_id'] in rs['allowed_pilots']:
+        return {'action': 'allow', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)}
+    if row['character_id'] in rs['denied_pilots']:
+        return {'action': 'deny', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)}
+    if row['corporation_id'] in rs['allowed_corps']:
+        return {'action': 'allow', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)}
+    if row['corporation_id'] in rs['denied_corps']:
+        return {'action': 'deny', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)}
+    if row['alliance_id'] in rs['allowed_alliances']:
+        return {'action': 'allow', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)}
+    if row['alliance_id'] in rs['denied_alliances']:
+        return {'action': 'deny', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)}
+    return None
+
+
+def _explicit_rule_matches(rs, row):
+    matches = []
+    if row['character_id'] in rs['allowed_pilots']:
+        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)})
+    if row['character_id'] in rs['denied_pilots']:
+        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)})
+    if row['corporation_id'] in rs['allowed_corps']:
+        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)})
+    if row['corporation_id'] in rs['denied_corps']:
+        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)})
+    if row['alliance_id'] in rs['allowed_alliances']:
+        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)})
+    if row['alliance_id'] in rs['denied_alliances']:
+        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)})
+    return matches
+
+
+def _matching_character_rows(EveCharacter, db, rs):
+    from django.db.models import Q
+
+    q = Q()
+    alliance_ids = rs['allowed_alliances'] | rs['denied_alliances']
+    corp_ids = rs['allowed_corps'] | rs['denied_corps']
+    pilot_ids = rs['allowed_pilots'] | rs['denied_pilots']
+
+    if alliance_ids:
+        q |= Q(alliance_id__in=alliance_ids)
+    if corp_ids:
+        q |= Q(corporation_id__in=corp_ids)
+    if pilot_ids:
+        q |= Q(character_id__in=pilot_ids)
+    if not q:
+        return []
+
+    return list(
+        EveCharacter.objects.using(db)
+        .filter(q, pending_delete=False)
+        .values(
+            'user_id',
+            'character_id',
+            'character_name',
+            'corporation_id',
+            'corporation_name',
+            'alliance_id',
+            'alliance_name',
+        )
+        .order_by('user_id', 'character_name')
+    )
+
+
+def _main_character_rows(EveCharacter, db, user_ids):
+    mains = {}
+    queryset = (
+        EveCharacter.objects.using(db)
+        .filter(user_id__in=user_ids, pending_delete=False)
+        .values(
+            'user_id',
+            'character_id',
+            'character_name',
+            'corporation_name',
+            'alliance_name',
+            'is_main',
+        )
+        .order_by('user_id', '-is_main', 'character_name')
+    )
+    for row in queryset:
+        mains.setdefault(row['user_id'], row)
+    return mains
+
+
+def _blocked_main_list(EveCharacter, db, rs):
+    account_rules = {}
+    for row in _matching_character_rows(EveCharacter, db, rs):
+        matches = _explicit_rule_matches(rs, row)
+        if not matches:
+            continue
+        user_rules = account_rules.setdefault(row['user_id'], {'allow': None, 'deny': None})
+        for match in matches:
+            current = user_rules[match['action']]
+            reason = {
+                'reason_type': match['reason_type'],
+                'detail': match['detail'],
+            }
+            user_rules[match['action']] = _prefer_denial_reason(current, reason)
+
+    blocked_by_user = {
+        user_id: rules['deny']
+        for user_id, rules in account_rules.items()
+        if rules['allow']
+        and rules['deny']
+        and _DENIAL_REASON_RANK[rules['deny']['reason_type']] >= _DENIAL_REASON_RANK[rules['allow']['reason_type']]
+    }
+
+    if not blocked_by_user:
+        return []
+
+    mains = _main_character_rows(EveCharacter, db, blocked_by_user.keys())
+    pilots = []
+    for user_id, reason in blocked_by_user.items():
+        main = mains.get(user_id)
+        if not main:
+            continue
+        denied_as = _DENIAL_REASON_LABELS[reason['reason_type']]
+        denied_detail = reason['detail']
+        character_name = main['character_name']
+        pilots.append(
+            {
+                'character_name': character_name,
+                'display_name': f'{character_name} (denied as: {denied_detail})',
+                'corporation': main['corporation_name'] or '-',
+                'alliance': main['alliance_name'] or '-',
+                'denied_as': denied_as,
+                'denied_detail': denied_detail,
+            }
+        )
+
+    pilots.sort(key=lambda pilot: pilot['character_name'].lower())
+    return pilots
+
+
 @login_required
 def acl_eligible(request):
     if not _can_view_acl(request.user):
         return _no_cache_json({'error': 'Forbidden'}, status=403)
-
-    from django.db.models import Q
 
     EveCharacter, db = _eve_char_setup()
     if EveCharacter is None or db is None:
         return _no_cache_json({'error': 'EVE data unavailable'}, status=503)
 
     rs = _acl_rule_sets()
-
-    q = Q()
-    # Base: in an allowed alliance, not in a denied corp, not individually denied
-    if rs['allowed_alliances']:
-        base = Q(alliance_id__in=rs['allowed_alliances'])
-        if rs['denied_corps']:
-            base &= ~Q(corporation_id__in=rs['denied_corps'])
-        if rs['denied_pilots']:
-            base &= ~Q(character_id__in=rs['denied_pilots'])
-        q |= base
-
-    # Pilot-level allows override everything
-    if rs['allowed_pilots']:
-        q |= Q(character_id__in=rs['allowed_pilots'])
-
-    if not q:
-        return _no_cache_json({'pilots': [], 'count': 0})
-
-    pilots = _char_list(
-        EveCharacter.objects.using(db).filter(q, pending_delete=False)
+    pilots = _char_list_from_rows(
+        row
+        for row in _matching_character_rows(EveCharacter, db, rs)
+        if (_explicit_rule_match(rs, row) or {}).get('action') == 'allow'
     )
     return _no_cache_json({'pilots': pilots, 'count': len(pilots)})
 
 
 @login_required
 def acl_blocked(request):
-    """Return pilots explicitly blocked by deny rules."""
+    """Return blocked accounts as their main pilot plus the most specific deny reason."""
     if not _can_view_acl(request.user):
         return _no_cache_json({'error': 'Forbidden'}, status=403)
-
-    from django.db.models import Q
 
     EveCharacter, db = _eve_char_setup()
     if EveCharacter is None or db is None:
         return _no_cache_json({'error': 'EVE data unavailable'}, status=503)
 
     rs = _acl_rule_sets()
-
-    q = Q()
-    # Pilots in denied alliances (unless individually allowed)
-    if rs['denied_alliances']:
-        base = Q(alliance_id__in=rs['denied_alliances'])
-        if rs['allowed_pilots']:
-            base &= ~Q(character_id__in=rs['allowed_pilots'])
-        q |= base
-
-    # Pilots in denied corps (unless individually allowed)
-    if rs['denied_corps']:
-        base = Q(corporation_id__in=rs['denied_corps'])
-        if rs['allowed_pilots']:
-            base &= ~Q(character_id__in=rs['allowed_pilots'])
-        q |= base
-
-    # Individually denied pilots
-    if rs['denied_pilots']:
-        q |= Q(character_id__in=rs['denied_pilots'])
-
-    if not q:
-        return _no_cache_json({'pilots': [], 'count': 0})
-
-    pilots = _char_list(
-        EveCharacter.objects.using(db).filter(q, pending_delete=False)
-    )
+    pilots = _blocked_main_list(EveCharacter, db, rs)
     return _no_cache_json({'pilots': pilots, 'count': len(pilots)})
 
 
