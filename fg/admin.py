@@ -1,12 +1,25 @@
 import json
 
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.db.models import Q
 from django.http import JsonResponse
 from django.urls import path
 from django.utils.html import format_html
 
-from .models import AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT
+from .acl_sync import sync_acl_rules_to_bg
+from .control import MurmurSyncError
+from .models import (
+    ACL_AUDIT_ACTION_CREATE,
+    ACL_AUDIT_ACTION_DELETE,
+    ACL_AUDIT_ACTION_UPDATE,
+    AccessRule,
+    AccessRuleAudit,
+    ENTITY_TYPE_ALLIANCE,
+    ENTITY_TYPE_CORPORATION,
+    ENTITY_TYPE_PILOT,
+    access_rule_snapshot,
+    append_access_rule_audit,
+)
 from .models import MurmurModelLookupError, resolve_murmur_models
 
 
@@ -311,7 +324,7 @@ class AccessRuleAdmin(admin.ModelAdmin):
             entity_type = entry.get('entity_type')
             if not entity_id or entity_type not in (ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT):
                 continue
-            _, was_created = AccessRule.objects.get_or_create(
+            rule, was_created = AccessRule.objects.get_or_create(
                 entity_id=entity_id,
                 defaults={
                     'entity_type': entity_type,
@@ -322,14 +335,56 @@ class AccessRuleAdmin(admin.ModelAdmin):
             )
             if was_created:
                 created.append(entity_id)
+                append_access_rule_audit(
+                    action=ACL_AUDIT_ACTION_CREATE,
+                    actor_username=request.user.get_username(),
+                    rule=rule,
+                    source='admin_batch_create',
+                )
             else:
                 skipped.append(entity_id)
+
+        sync_status = 'not_needed'
+        sync_error = ''
+        if created:
+            try:
+                response = sync_acl_rules_to_bg(
+                    requested_by=request.user.get_username() or 'system',
+                    actor_username=request.user.get_username() or 'system',
+                    source='admin_batch_create_sync',
+                    trigger='implicit',
+                )
+            except MurmurSyncError as exc:
+                sync_status = 'failed'
+                sync_error = str(exc)
+            else:
+                sync_status = str(response.get('status', 'completed')).lower()
 
         return JsonResponse({
             'created': len(created),
             'skipped': len(skipped),
             'skipped_ids': skipped,
+            'sync_status': sync_status,
+            'sync_error': sync_error,
         })
+
+    def _sync_acl_rules(self, request, *, source, trigger, rule=None, acl_id=None):
+        actor_username = request.user.get_username() or 'system'
+        try:
+            sync_acl_rules_to_bg(
+                requested_by=actor_username,
+                actor_username=actor_username,
+                source=source,
+                trigger=trigger,
+                rule=rule,
+                acl_id=acl_id,
+            )
+        except MurmurSyncError as exc:
+            self.message_user(
+                request,
+                f'ACL was updated locally, but BG sync failed: {exc}',
+                level=messages.WARNING,
+            )
 
     def entity_type_badge(self, obj):
         colors = {
@@ -387,9 +442,61 @@ class AccessRuleAdmin(admin.ModelAdmin):
         return super().get_fieldsets(request, obj)
 
     def save_model(self, request, obj, form, change):
+        previous = None
+        if change:
+            previous = access_rule_snapshot(AccessRule.objects.get(pk=obj.pk))
         if not change and not obj.created_by:
             obj.created_by = request.user.get_username()
         super().save_model(request, obj, form, change)
+        append_access_rule_audit(
+            action=ACL_AUDIT_ACTION_UPDATE if change else ACL_AUDIT_ACTION_CREATE,
+            actor_username=request.user.get_username(),
+            rule=obj,
+            source='admin_changeform',
+            previous=previous,
+        )
+        self._sync_acl_rules(
+            request,
+            source='admin_changeform_sync',
+            trigger='implicit',
+            rule=obj,
+        )
+
+    def delete_model(self, request, obj):
+        append_access_rule_audit(
+            action=ACL_AUDIT_ACTION_DELETE,
+            actor_username=request.user.get_username(),
+            rule=obj,
+            source='admin_changeform',
+            previous=access_rule_snapshot(obj),
+        )
+        deleted_acl_id = obj.pk
+        super().delete_model(request, obj)
+        self._sync_acl_rules(
+            request,
+            source='admin_changeform_sync',
+            trigger='implicit',
+            rule=obj,
+            acl_id=deleted_acl_id,
+        )
+
+    def delete_queryset(self, request, queryset):
+        rules = list(queryset)
+        for obj in rules:
+            append_access_rule_audit(
+                action=ACL_AUDIT_ACTION_DELETE,
+                actor_username=request.user.get_username(),
+                rule=obj,
+                source='admin_delete_queryset',
+                previous=access_rule_snapshot(obj),
+            )
+        super().delete_queryset(request, queryset)
+        if rules:
+            self._sync_acl_rules(
+                request,
+                source='admin_delete_queryset_sync',
+                trigger='implicit',
+            )
 
     def changeform_view(self, request, object_id=None, form_url='', extra_context=None):
         extra_context = extra_context or {}
@@ -461,3 +568,41 @@ else:
                 ),
             }),
         )
+
+
+@admin.register(AccessRuleAudit)
+class AccessRuleAuditAdmin(admin.ModelAdmin):
+    list_display = (
+        'occurred_at',
+        'action',
+        'entity_id',
+        'entity_type',
+        'deny',
+        'actor_username',
+        'source',
+    )
+    list_filter = ('action', 'entity_type', 'deny', 'source')
+    search_fields = ('=entity_id', 'actor_username', 'source', 'note', 'acl_created_by')
+    readonly_fields = (
+        'occurred_at',
+        'acl_id',
+        'action',
+        'actor_username',
+        'source',
+        'entity_id',
+        'entity_type',
+        'deny',
+        'note',
+        'acl_created_by',
+        'previous',
+        'metadata',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

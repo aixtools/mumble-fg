@@ -9,11 +9,16 @@ from django.urls import reverse
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 
+from .acl_sync import sync_acl_rules_to_bg
 from .control import BgControlClient, MurmurSyncError
 from .host import get_host_adapter
 from .models import (
+    ACL_AUDIT_ACTION_CREATE,
+    ACL_AUDIT_ACTION_DELETE,
+    ACL_AUDIT_ACTION_UPDATE,
     AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT,
-    MumbleUser, MurmurModelLookupError, resolve_murmur_models,
+    MumbleUser, MurmurModelLookupError, access_rule_snapshot, append_access_rule_audit,
+    resolve_murmur_models,
 )
 from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers, safe_registration_inventory
 
@@ -595,19 +600,63 @@ def sync_contract_registration(request, pkid: int, server_id: int):
 # Mumble ACL (user-facing access control list)
 # ---------------------------------------------------------------------------
 
-def _can_view_acl(user):
+def _acl_admin_bypass(user):
+    return user.is_staff or get_host_adapter().user_is_alliance_leader(user)
+
+
+def _has_acl_perm(user, codename):
     return user.is_authenticated and (
-        user.is_staff
-        or user.has_perm('mumble_fg.view_accessrule')
-        or get_host_adapter().user_is_alliance_leader(user)
+        _acl_admin_bypass(user)
+        or user.has_perm(f'mumble_fg.{codename}')
     )
 
 
-def _can_edit_acl(user):
-    return user.is_authenticated and (
-        user.is_staff
-        or user.has_perm('mumble_fg.change_accessrule')
-        or get_host_adapter().user_is_alliance_leader(user)
+def _can_view_acl(user):
+    return _has_acl_perm(user, 'view_accessrule')
+
+
+def _can_create_acl(user):
+    return _can_view_acl(user) and _has_acl_perm(user, 'add_accessrule')
+
+
+def _can_change_acl(user):
+    return _can_view_acl(user) and _has_acl_perm(user, 'change_accessrule')
+
+
+def _can_delete_acl(user):
+    return _can_view_acl(user) and _has_acl_perm(user, 'delete_accessrule')
+
+
+def _sync_acl_rules_after_change(request, *, source, trigger, rule=None, acl_id=None):
+    actor_username = request.user.get_username() or 'system'
+    return sync_acl_rules_to_bg(
+        requested_by=actor_username,
+        actor_username=actor_username,
+        source=source,
+        trigger=trigger,
+        rule=rule,
+        acl_id=acl_id,
+    )
+
+
+def _acl_sync_failure_message(request, exc):
+    messages.warning(
+        request,
+        _('ACL was updated locally, but BG sync failed: %(error)s.') % {'error': str(exc)},
+    )
+
+
+def _bg_unavailable_error(exc):
+    message = str(exc or '')
+    lowered = message.lower()
+    return (
+        'control endpoint unreachable' in lowered
+        or 'connection refused' in lowered
+        or 'timed out' in lowered
+        or 'timedout' in lowered
+        or 'control request failed (502)' in lowered
+        or 'control request failed (503)' in lowered
+        or 'control request failed (504)' in lowered
     )
 
 
@@ -639,20 +688,23 @@ def acl_list(request):
     for rule in rules:
         rule.resolved_name = _resolve_name_for_rule(rule)
 
-    can_edit = _can_edit_acl(request.user)
     return render(request, 'fg/acl.html', {
         'rules': rules,
-        'can_edit': can_edit,
+        'can_create_acl': _can_create_acl(request.user),
+        'can_change_acl': _can_change_acl(request.user),
+        'can_delete_acl': _can_delete_acl(request.user),
+        'can_sync_acl': _can_change_acl(request.user),
         'search_url': reverse('mumble:acl_search'),
         'batch_url': reverse('mumble:acl_batch_create'),
         'eligible_url': reverse('mumble:acl_eligible'),
         'blocked_url': reverse('mumble:acl_blocked'),
+        'sync_url': reverse('mumble:acl_sync'),
     })
 
 
 @login_required
 def acl_search(request):
-    if not _can_view_acl(request.user):
+    if not _can_create_acl(request.user):
         return JsonResponse({'error': 'Forbidden'}, status=403)
 
     from .admin import _search_eve_entities
@@ -667,7 +719,7 @@ def acl_search(request):
 @require_POST
 @login_required
 def acl_batch_create(request):
-    if not _can_edit_acl(request.user):
+    if not _can_create_acl(request.user):
         return JsonResponse({'error': 'Forbidden'}, status=403)
 
     try:
@@ -690,7 +742,7 @@ def acl_batch_create(request):
         entity_type = entry.get('entity_type')
         if not entity_id or entity_type not in (ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT):
             continue
-        _, was_created = AccessRule.objects.get_or_create(
+        rule, was_created = AccessRule.objects.get_or_create(
             entity_id=entity_id,
             defaults={
                 'entity_type': entity_type,
@@ -701,13 +753,36 @@ def acl_batch_create(request):
         )
         if was_created:
             created.append(entity_id)
+            append_access_rule_audit(
+                action=ACL_AUDIT_ACTION_CREATE,
+                actor_username=request.user.get_username(),
+                rule=rule,
+                source='acl_ui_batch_create',
+            )
         else:
             skipped.append(entity_id)
+
+    sync_status = 'not_needed'
+    sync_error = ''
+    if created:
+        try:
+            response = _sync_acl_rules_after_change(
+                request,
+                source='acl_ui_batch_create_sync',
+                trigger='implicit',
+            )
+        except MurmurSyncError as exc:
+            sync_status = 'failed'
+            sync_error = str(exc)
+        else:
+            sync_status = str(response.get('status', 'completed')).lower()
 
     return JsonResponse({
         'created': len(created),
         'skipped': len(skipped),
         'skipped_ids': skipped,
+        'sync_status': sync_status,
+        'sync_error': sync_error,
     })
 
 
@@ -882,7 +957,7 @@ def _main_character_rows(EveCharacter, db, user_ids):
     return mains
 
 
-def _blocked_main_list(EveCharacter, db, rs):
+def _account_rule_decisions(EveCharacter, db, rs):
     account_rules = {}
     for row in _matching_character_rows(EveCharacter, db, rs):
         matches = _explicit_rule_matches(rs, row)
@@ -896,8 +971,11 @@ def _blocked_main_list(EveCharacter, db, rs):
                 'detail': match['detail'],
             }
             user_rules[match['action']] = _prefer_denial_reason(current, reason)
+    return account_rules
 
-    blocked_by_user = {
+
+def _blocked_user_reasons(account_rules):
+    return {
         user_id: rules['deny']
         for user_id, rules in account_rules.items()
         if rules['allow']
@@ -905,6 +983,9 @@ def _blocked_main_list(EveCharacter, db, rs):
         and _DENIAL_REASON_RANK[rules['deny']['reason_type']] >= _DENIAL_REASON_RANK[rules['allow']['reason_type']]
     }
 
+
+def _blocked_main_list(EveCharacter, db, rs):
+    blocked_by_user = _blocked_user_reasons(_account_rule_decisions(EveCharacter, db, rs))
     if not blocked_by_user:
         return []
 
@@ -932,6 +1013,50 @@ def _blocked_main_list(EveCharacter, db, rs):
     return pilots
 
 
+def _eligible_account_list(EveCharacter, db, rs):
+    blocked_user_ids = set(_blocked_user_reasons(_account_rule_decisions(EveCharacter, db, rs)))
+    allowed_rows_by_user = {}
+    for row in _matching_character_rows(EveCharacter, db, rs):
+        if row['user_id'] in blocked_user_ids:
+            continue
+        match = _explicit_rule_match(rs, row) or {}
+        if match.get('action') != 'allow':
+            continue
+        allowed_rows_by_user.setdefault(row['user_id'], []).append((row, match))
+
+    if not allowed_rows_by_user:
+        return []
+
+    mains = _main_character_rows(EveCharacter, db, allowed_rows_by_user.keys())
+    pilots = []
+    for user_id, allowed_rows in allowed_rows_by_user.items():
+        main = mains.get(user_id)
+        if not main:
+            continue
+
+        alt_lines = sorted(
+            {
+                row['character_name']
+                for row, match in allowed_rows
+                if match['reason_type'] == ENTITY_TYPE_PILOT
+                and row['character_id'] != main['character_id']
+            },
+            key=str.lower,
+        )
+        pilot_lines = [main['character_name'], *alt_lines]
+        pilots.append(
+            {
+                'character_name': main['character_name'],
+                'pilot_lines': pilot_lines,
+                'corporation': main['corporation_name'] or '-',
+                'alliance': main['alliance_name'] or '-',
+            }
+        )
+
+    pilots.sort(key=lambda pilot: pilot['character_name'].lower())
+    return pilots
+
+
 @login_required
 def acl_eligible(request):
     if not _can_view_acl(request.user):
@@ -942,11 +1067,7 @@ def acl_eligible(request):
         return _no_cache_json({'error': 'EVE data unavailable'}, status=503)
 
     rs = _acl_rule_sets()
-    pilots = _char_list_from_rows(
-        row
-        for row in _matching_character_rows(EveCharacter, db, rs)
-        if (_explicit_rule_match(rs, row) or {}).get('action') == 'allow'
-    )
+    pilots = _eligible_account_list(EveCharacter, db, rs)
     return _no_cache_json({'pilots': pilots, 'count': len(pilots)})
 
 
@@ -967,23 +1088,105 @@ def acl_blocked(request):
 
 @require_POST
 @login_required
+def acl_sync(request):
+    if not _can_change_acl(request.user):
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'error': 'Forbidden'}, status=403)
+        return HttpResponseForbidden()
+
+    try:
+        response = _sync_acl_rules_after_change(
+            request,
+            source='acl_ui_sync',
+            trigger='manual',
+        )
+    except MurmurSyncError as exc:
+        bg_unavailable = _bg_unavailable_error(exc)
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            if bg_unavailable:
+                return JsonResponse(
+                    {'error': _('BG unavailable'), 'bg_unavailable': True},
+                    status=503,
+                )
+            return JsonResponse(
+                {
+                    'error': _('ACL sync failed: %(error)s.') % {'error': str(exc)},
+                    'bg_unavailable': False,
+                },
+                status=502,
+            )
+        if bg_unavailable:
+            messages.warning(request, _('BG unavailable'))
+        else:
+            messages.warning(request, _('ACL sync failed: %(error)s.') % {'error': str(exc)})
+    else:
+        total = response.get('total')
+        if not isinstance(total, int):
+            total = AccessRule.objects.count()
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({
+                'status': 'completed',
+                'message': _('ACL synchronized to BG (%(count)s entries).') % {'count': total},
+                'total': total,
+            })
+        messages.success(request, _('ACL synchronized to BG (%(count)s entries).') % {'count': total})
+    return redirect('mumble:acl_list')
+
+
+@require_POST
+@login_required
 def acl_toggle_deny(request, rule_id):
-    if not _can_edit_acl(request.user):
+    if not _can_change_acl(request.user):
         return HttpResponseForbidden()
 
     rule = get_object_or_404(AccessRule, pk=rule_id)
+    previous = access_rule_snapshot(rule)
     rule.deny = not rule.deny
     rule.save(update_fields=['deny', 'updated_at'])
+    append_access_rule_audit(
+        action=ACL_AUDIT_ACTION_UPDATE,
+        actor_username=request.user.get_username(),
+        rule=rule,
+        source='acl_ui_toggle_deny',
+        previous=previous,
+    )
+    try:
+        _sync_acl_rules_after_change(
+            request,
+            source='acl_ui_toggle_deny_sync',
+            trigger='implicit',
+            rule=rule,
+        )
+    except MurmurSyncError as exc:
+        _acl_sync_failure_message(request, exc)
     return redirect('mumble:acl_list')
 
 
 @require_POST
 @login_required
 def acl_delete(request, rule_id):
-    if not _can_edit_acl(request.user):
+    if not _can_delete_acl(request.user):
         return HttpResponseForbidden()
 
     rule = get_object_or_404(AccessRule, pk=rule_id)
+    append_access_rule_audit(
+        action=ACL_AUDIT_ACTION_DELETE,
+        actor_username=request.user.get_username(),
+        rule=rule,
+        source='acl_ui_delete',
+        previous=access_rule_snapshot(rule),
+    )
+    deleted_acl_id = rule.pk
     rule.delete()
+    try:
+        _sync_acl_rules_after_change(
+            request,
+            source='acl_ui_delete_sync',
+            trigger='implicit',
+            rule=rule,
+            acl_id=deleted_acl_id,
+        )
+    except MurmurSyncError as exc:
+        _acl_sync_failure_message(request, exc)
     messages.success(request, _('ACL entry deleted.'))
     return redirect('mumble:acl_list')

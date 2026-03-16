@@ -10,9 +10,17 @@ _CUBE_INTEGRATION = CubeMurmurIntegration()
 
 def get_i18n_urlpatterns():
     return [
-        path('mumble/', include('fg.urls')),
+        path('mumble-ui/', include('fg.urls')),
     ]
 
 
 def get_profile_panels(request):
     return _CUBE_INTEGRATION.get_profile_panels(request)
+
+
+def get_periodic_tasks():
+    from fg.tasks import periodic_acl_sync
+
+    return {
+        'mumble_fg.periodic_acl_sync': periodic_acl_sync,
+    }

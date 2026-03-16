@@ -1,5 +1,6 @@
 import logging
 
+from .acl_sync import sync_acl_rules_to_bg
 from .models import MumbleUser
 from .views import _compute_display_name, _compute_groups
 
@@ -36,3 +37,20 @@ def update_all_mumble_groups():
     logger.info('Running mumble group updates for %d active users', len(mu_ids))
     for mu_id in mu_ids:
         update_mumble_groups(mu_id)
+
+
+def periodic_acl_sync():
+    response = sync_acl_rules_to_bg(
+        requested_by='fg.periodic',
+        actor_username='system',
+        source='acl_periodic_sync',
+        trigger='periodic',
+    )
+    logger.info(
+        'Periodic ACL sync completed: total=%s created=%s updated=%s deleted=%s',
+        response.get('total'),
+        response.get('created'),
+        response.get('updated'),
+        response.get('deleted'),
+    )
+    return response

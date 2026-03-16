@@ -273,3 +273,140 @@ class ACLBlockedViewTest(TestCase):
         data = response.json()
         self.assertEqual(data['count'], 0)
         self.assertEqual(data['pilots'], [])
+
+    def test_eligible_view_excludes_blocked_account_when_alt_is_denied_pilot(self):
+        blocked_user = User.objects.create_user('eligibleblockeduser', password='pass')
+        UserProfile.objects.create(user=blocked_user, is_member=True)
+        self._make_cube_character(
+            blocked_user,
+            character_id=960001,
+            character_name='Leo Rises',
+            corporation_id=980060,
+            corporation_name='Allowed Corp',
+            alliance_id=990060,
+            alliance_name='Allowed Alliance',
+            is_main=True,
+        )
+        self._make_cube_character(
+            blocked_user,
+            character_id=960002,
+            character_name='Zosma Rises',
+            corporation_id=980060,
+            corporation_name='Allowed Corp',
+            alliance_id=990060,
+            alliance_name='Allowed Alliance',
+        )
+        AccessRule.objects.create(entity_id=990060, entity_type=ENTITY_TYPE_ALLIANCE, deny=False)
+        AccessRule.objects.create(entity_id=960002, entity_type=ENTITY_TYPE_PILOT, deny=True)
+
+        response = self.client.get(reverse('mumble:acl_eligible'))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['count'], 0)
+        self.assertEqual(data['pilots'], [])
+
+    def test_eligible_view_excludes_account_when_alt_is_in_denied_alliance(self):
+        blocked_user = User.objects.create_user('eligibleallianceblockeduser', password='pass')
+        UserProfile.objects.create(user=blocked_user, is_member=True)
+        self._make_cube_character(
+            blocked_user,
+            character_id=970001,
+            character_name='Zeza',
+            corporation_id=980070,
+            corporation_name='Allowed Corp',
+            alliance_id=990070,
+            alliance_name='Allowed Alliance',
+            is_main=True,
+        )
+        self._make_cube_character(
+            blocked_user,
+            character_id=970002,
+            character_name='Saisaishi Muvila',
+            corporation_id=980071,
+            corporation_name='Denied Corp',
+            alliance_id=990071,
+            alliance_name='Denied Alliance',
+        )
+        AccessRule.objects.create(entity_id=990070, entity_type=ENTITY_TYPE_ALLIANCE, deny=False)
+        AccessRule.objects.create(entity_id=990071, entity_type=ENTITY_TYPE_ALLIANCE, deny=True)
+
+        response = self.client.get(reverse('mumble:acl_eligible'))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['count'], 0)
+        self.assertEqual(data['pilots'], [])
+
+    def test_eligible_view_shows_only_main_for_alliance_allowed_account(self):
+        eligible_user = User.objects.create_user('eligiblemainonlyuser', password='pass')
+        UserProfile.objects.create(user=eligible_user, is_member=True)
+        self._make_cube_character(
+            eligible_user,
+            character_id=980001,
+            character_name='Leo Rises',
+            corporation_id=980080,
+            corporation_name='Allowed Corp',
+            alliance_id=990080,
+            alliance_name='Allowed Alliance',
+            is_main=True,
+        )
+        self._make_cube_character(
+            eligible_user,
+            character_id=980002,
+            character_name='Amori',
+            corporation_id=980080,
+            corporation_name='Allowed Corp',
+            alliance_id=990080,
+            alliance_name='Allowed Alliance',
+        )
+        self._make_cube_character(
+            eligible_user,
+            character_id=980003,
+            character_name='Zosma',
+            corporation_id=980080,
+            corporation_name='Allowed Corp',
+            alliance_id=990080,
+            alliance_name='Allowed Alliance',
+        )
+        AccessRule.objects.create(entity_id=990080, entity_type=ENTITY_TYPE_ALLIANCE, deny=False)
+
+        response = self.client.get(reverse('mumble:acl_eligible'))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['count'], 1)
+        self.assertEqual(data['pilots'][0]['character_name'], 'Leo Rises')
+        self.assertEqual(data['pilots'][0]['pilot_lines'], ['Leo Rises'])
+
+    def test_eligible_view_groups_main_with_explicitly_allowed_alt(self):
+        eligible_user = User.objects.create_user('eligiblealtuser', password='pass')
+        UserProfile.objects.create(user=eligible_user, is_member=True)
+        self._make_cube_character(
+            eligible_user,
+            character_id=990001,
+            character_name='Main Pilot',
+            corporation_id=980090,
+            corporation_name='Denied Corp',
+            alliance_id=990090,
+            alliance_name='Denied Alliance',
+            is_main=True,
+        )
+        self._make_cube_character(
+            eligible_user,
+            character_id=990002,
+            character_name='Allowed Alt',
+            corporation_id=980091,
+            corporation_name='Denied Corp',
+            alliance_id=990091,
+            alliance_name='Denied Alliance',
+        )
+        AccessRule.objects.create(entity_id=990002, entity_type=ENTITY_TYPE_PILOT, deny=False)
+
+        response = self.client.get(reverse('mumble:acl_eligible'))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['count'], 1)
+        self.assertEqual(data['pilots'][0]['character_name'], 'Main Pilot')
+        self.assertEqual(data['pilots'][0]['pilot_lines'], ['Main Pilot', 'Allowed Alt'])

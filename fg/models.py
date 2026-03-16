@@ -94,6 +94,18 @@ ENTITY_TYPE_CHOICES = [
     (ENTITY_TYPE_PILOT, 'Pilot'),
 ]
 
+ACL_AUDIT_ACTION_CREATE = 'create'
+ACL_AUDIT_ACTION_UPDATE = 'update'
+ACL_AUDIT_ACTION_DELETE = 'delete'
+ACL_AUDIT_ACTION_SYNC = 'sync'
+
+ACL_AUDIT_ACTION_CHOICES = [
+    (ACL_AUDIT_ACTION_CREATE, 'Create'),
+    (ACL_AUDIT_ACTION_UPDATE, 'Update'),
+    (ACL_AUDIT_ACTION_DELETE, 'Delete'),
+    (ACL_AUDIT_ACTION_SYNC, 'Sync'),
+]
+
 
 class AccessRule(models.Model):
     """
@@ -151,8 +163,147 @@ class AccessRule(models.Model):
         return f'{action} {self.entity_type} {self.entity_id}'
 
 
+def access_rule_snapshot(rule: AccessRule | None) -> dict[str, Any]:
+    if rule is None:
+        return {}
+    return {
+        'entity_id': rule.entity_id,
+        'entity_type': rule.entity_type,
+        'deny': rule.deny,
+        'note': rule.note,
+        'created_by': rule.created_by,
+    }
+
+
+class AccessRuleAudit(models.Model):
+    """Append-only audit trail for FG ACL mutations."""
+
+    acl_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text='ACL primary key at the time of the audit event.',
+    )
+    action = models.CharField(
+        max_length=16,
+        choices=ACL_AUDIT_ACTION_CHOICES,
+    )
+    actor_username = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Username that initiated the change.',
+    )
+    source = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='Originating FG surface (e.g. ACL UI or admin).',
+    )
+    entity_id = models.BigIntegerField(
+        null=True,
+        blank=True,
+        help_text='EVE Online ID (alliance, corporation, or character) when tied to one ACL row.',
+    )
+    entity_type = models.CharField(
+        max_length=16,
+        choices=ENTITY_TYPE_CHOICES,
+        null=True,
+        blank=True,
+    )
+    deny = models.BooleanField(
+        null=True,
+        blank=True,
+    )
+    note = models.TextField(blank=True, default='')
+    acl_created_by = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Original creator recorded on the active ACL row.',
+    )
+    previous = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text='Prior ACL row snapshot for update events.',
+    )
+    metadata = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text='Additional event context such as sync trigger and BG response summary.',
+    )
+    occurred_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'fg_access_rule_audit'
+        ordering = ['-occurred_at', '-id']
+        verbose_name = 'access control audit entry'
+        verbose_name_plural = 'access control audit log'
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise RuntimeError('AccessRuleAudit entries are append-only.')
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise RuntimeError('AccessRuleAudit entries are append-only.')
+
+    def __str__(self):
+        if self.entity_type and self.entity_id is not None:
+            return f'{self.action.upper()} {self.entity_type} {self.entity_id}'
+        return f'{self.action.upper()} {self.source or "acl"}'
+
+
+def append_access_rule_audit(
+    *,
+    action: str,
+    actor_username: str,
+    rule: AccessRule | None = None,
+    acl_id: int | None = None,
+    source: str,
+    previous: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    entity_id: int | None = None,
+    entity_type: str | None = None,
+    deny: bool | None = None,
+    note: str | None = None,
+    acl_created_by: str | None = None,
+) -> AccessRuleAudit:
+    if rule is not None:
+        if acl_id is None:
+            acl_id = getattr(rule, 'pk', None)
+        if entity_id is None:
+            entity_id = rule.entity_id
+        if entity_type is None:
+            entity_type = rule.entity_type
+        if deny is None:
+            deny = rule.deny
+        if note is None:
+            note = rule.note
+        if acl_created_by is None:
+            acl_created_by = rule.created_by
+
+    return AccessRuleAudit.objects.create(
+        acl_id=acl_id,
+        action=action,
+        actor_username=str(actor_username or ''),
+        source=str(source or ''),
+        entity_id=entity_id,
+        entity_type=entity_type,
+        deny=deny,
+        note=str(note or ''),
+        acl_created_by=str(acl_created_by or ''),
+        previous=previous or {},
+        metadata=metadata or {},
+    )
+
+
 __all__ = [
     'AccessRule',
+    'AccessRuleAudit',
+    'ACL_AUDIT_ACTION_CREATE',
+    'ACL_AUDIT_ACTION_DELETE',
+    'ACL_AUDIT_ACTION_SYNC',
+    'ACL_AUDIT_ACTION_UPDATE',
     'ENTITY_TYPE_ALLIANCE',
     'ENTITY_TYPE_CORPORATION',
     'ENTITY_TYPE_PILOT',
@@ -160,6 +311,8 @@ __all__ = [
     'MurmurModelLookupError',
     'MurmurModelResolver',
     'ResolvedMurmurModels',
+    'access_rule_snapshot',
+    'append_access_rule_audit',
     'resolve_murmur_model',
     'resolve_murmur_models',
 ]

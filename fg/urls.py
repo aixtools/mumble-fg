@@ -26,6 +26,7 @@ urlpatterns = [
     path('acl/batch-create/', views.acl_batch_create, name='acl_batch_create'),
     path('acl/eligible/', views.acl_eligible, name='acl_eligible'),
     path('acl/blocked/', views.acl_blocked, name='acl_blocked'),
+    path('acl/sync/', views.acl_sync, name='acl_sync'),
     path('acl/<int:rule_id>/toggle-deny/', views.acl_toggle_deny, name='acl_toggle_deny'),
     path('acl/<int:rule_id>/delete/', views.acl_delete, name='acl_delete'),
 ]

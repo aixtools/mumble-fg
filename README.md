@@ -76,14 +76,19 @@ whole account is denied — unless a pilot-level allow overrides it.
 
 The ACL panel provides two on-demand pilot lists:
 
-- **Eligible Pilots** — all characters matched by the current rules: members of
-  allowed alliances (minus denied corps and denied pilots), plus individually
-  allowed pilots.
+- **Eligible Pilots** — one row per eligible account, showing the main
+  character first and any explicitly allowed non-main alts underneath. Alliance
+  or corp allowance by itself does not list every alt on the account.
 - **Blocked Pilots** — only characters **explicitly** hit by a deny rule
   (denied alliance, denied corp, or individually denied pilot). Characters in
   unlisted alliances are implicitly denied but do **not** appear on this list —
   the implicitly-denied set is effectively the entire EVE universe minus the
   eligible set.
+
+ACL changes now trigger an immediate full-table FG→BG sync, and the ACL page
+also exposes a manual `Sync BG` action for users with `change_accessrule`.
+For host-side scheduling, `manage.py sync_mumble_acl` runs the same full-table
+sync and appends a `sync` audit entry.
 
 Shared fg/bg naming and boundary conventions are documented in [docs/conventions.md](/home/michael/prj/mumble-fg/docs/conventions.md).
 Dev deploy/bootstrap guidance is documented in [docs/bootstrap-dev-deploy.md](/home/michael/prj/mumble-fg/docs/bootstrap-dev-deploy.md).
