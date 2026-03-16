@@ -354,6 +354,50 @@ class BgControlClient:
         response = _post_json('/v1/registrations/contract-sync', payload, requested_by=requested_by)
         return MurmurContract.from_mapping(response).as_payload()
 
+    def sync_access_rules(
+        self,
+        rules: Iterable[dict[str, Any]],
+        *,
+        requested_by: str | None = None,
+        is_super: bool = True,
+    ) -> dict[str, Any]:
+        payload_rules: list[dict[str, Any]] = []
+        for idx, rule in enumerate(rules):
+            if not isinstance(rule, dict):
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: expected object')
+
+            try:
+                entity_id = int(rule['entity_id'])
+            except (KeyError, TypeError, ValueError):
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: entity_id') from None
+
+            entity_type = str(rule.get('entity_type', '') or '').strip()
+            if entity_type not in {'alliance', 'corporation', 'pilot'}:
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: entity_type')
+
+            deny = rule.get('deny')
+            if not isinstance(deny, bool):
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: deny')
+
+            payload_rules.append(
+                {
+                    'entity_id': entity_id,
+                    'entity_type': entity_type,
+                    'block': deny,
+                    'note': str(rule.get('note', '') or ''),
+                    'created_by': str(rule.get('created_by', '') or ''),
+                }
+            )
+
+        return _post_json(
+            '/v1/access-rules/sync',
+            {
+                'is_super': bool(is_super),
+                'rules': payload_rules,
+            },
+            requested_by=requested_by,
+        )
+
 
 __all__ = [
     'MurmurSyncError',

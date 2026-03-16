@@ -16,7 +16,7 @@ dependencies = [
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["fg*"]
+include = ["fg*", "mumble_ui*"]
 
 [tool.setuptools.package-data]
 fg = ["templates/fg/*.html", "templates/fg/panels/*.html", "templates/admin/**/*.html"]

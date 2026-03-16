@@ -85,6 +85,11 @@ The ACL panel provides two on-demand pilot lists:
   the implicitly-denied set is effectively the entire EVE universe minus the
   eligible set.
 
+ACL changes now trigger an immediate full-table FG→BG sync, and the ACL page
+also exposes a manual `Sync BG` action for users with `change_accessrule`.
+For host-side scheduling, `manage.py sync_mumble_acl` runs the same full-table
+sync and appends a `sync` audit entry.
+
 Shared fg/bg naming and boundary conventions are documented in [docs/conventions.md](/home/michael/prj/mumble-fg/docs/conventions.md).
 Dev deploy/bootstrap guidance is documented in [docs/bootstrap-dev-deploy.md](/home/michael/prj/mumble-fg/docs/bootstrap-dev-deploy.md).
 FG/BG smoke-test checklist is documented in [docs/fg-bg-integration-smoke.md](/home/michael/prj/mumble-fg/docs/fg-bg-integration-smoke.md).
