@@ -1,34 +1,45 @@
 from django.contrib import admin
 
-from .models import MurmurModelLookupError, resolve_murmur_models
+from .models import AccessRule, MurmurModelLookupError, resolve_murmur_models
+
+
+@admin.register(AccessRule)
+class AccessRuleAdmin(admin.ModelAdmin):
+    list_display = ('entity_id', 'entity_type', 'block', 'note', 'created_by', 'updated_at')
+    list_filter = ('entity_type', 'block')
+    search_fields = ('entity_id', 'note', 'created_by')
+    list_editable = ('block',)
+    readonly_fields = ('created_at', 'updated_at')
+    fieldsets = (
+        (None, {
+            'fields': ('entity_id', 'entity_type', 'block', 'note', 'created_by'),
+            'description': (
+                '<h3>Eligibility Rules</h3>'
+                '<p>Precedence (most specific wins): '
+                '<strong>Pilot</strong> &gt; <strong>Corporation</strong> &gt; <strong>Alliance</strong></p>'
+                '<ul>'
+                '<li><strong>Alliance</strong>: block=False means the alliance is permitted. '
+                'Alliances not listed are implicitly denied.</li>'
+                '<li><strong>Corporation</strong>: block=True denies a corp within an allowed alliance.</li>'
+                '<li><strong>Pilot</strong>: overrides corp and alliance. '
+                'block=False rescues a pilot even if their corp is blocked.</li>'
+                '</ul>'
+                '<p>Block checks are <strong>account-wide</strong>: '
+                'if main or any alt matches a block, the entire account is denied '
+                '&mdash; unless a pilot-level allow overrides it.</p>'
+            ),
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+        }),
+    )
+
 
 try:
-    MumbleServer, MumbleSession, MumbleUser = resolve_murmur_models()
+    (MumbleUser,) = resolve_murmur_models()
 except MurmurModelLookupError:
-    MumbleServer = MumbleSession = MumbleUser = None
+    MumbleUser = None
 else:
-    @admin.register(MumbleServer)
-    class MumbleServerAdmin(admin.ModelAdmin):
-        list_display = ('name', 'address', 'ice_host', 'ice_port', 'virtual_server_id', 'is_active', 'display_order')
-        list_filter = ('is_active',)
-        list_editable = ('is_active', 'display_order')
-        fieldsets = (
-            (None, {
-                'fields': ('name', 'address', 'ice_host', 'ice_port', 'ice_secret', 'virtual_server_id', 'is_active', 'display_order'),
-                'description': (
-                    '<h3>Setup Instructions</h3>'
-                    '<ol>'
-                    '<li>On the Mumble server: set <code>ice="tcp -h 0.0.0.0 -p 6502"</code> '
-                    'and <code>icesecretwrite=&lt;secret&gt;</code></li>'
-                    '<li>Ensure the mumble-bg auth service can reach the ICE endpoint over the network</li>'
-                    '<li>Add the server here with matching ICE host, port, secret, and virtual server ID when needed</li>'
-                    '<li>Restart the mumble-bg auth service after inventory changes</li>'
-                    '</ol>'
-                ),
-            }),
-        )
-
-
     @admin.register(MumbleUser)
     class MumbleUserAdmin(admin.ModelAdmin):
         list_display = (
@@ -85,50 +96,4 @@ else:
                     'updated_at',
                 ),
             }),
-        )
-
-
-    @admin.register(MumbleSession)
-    class MumbleSessionAdmin(admin.ModelAdmin):
-        list_display = (
-            'server',
-            'session_id',
-            'username',
-            'mumble_userid',
-            'mumble_user',
-            'channel_id',
-            'is_active',
-            'connected_at',
-            'last_seen',
-            'last_spoke',
-            'disconnected_at',
-        )
-        search_fields = ('username', 'mumble_user__username', 'mumble_user__user__username', 'address')
-        list_filter = ('is_active', 'server')
-        readonly_fields = (
-            'server',
-            'mumble_user',
-            'session_id',
-            'mumble_userid',
-            'username',
-            'channel_id',
-            'address',
-            'cert_hash',
-            'tcponly',
-            'mute',
-            'deaf',
-            'suppress',
-            'priority_speaker',
-            'self_mute',
-            'self_deaf',
-            'recording',
-            'onlinesecs',
-            'idlesecs',
-            'connected_at',
-            'last_seen',
-            'last_state',
-            'last_spoke',
-            'disconnected_at',
-            'created_at',
-            'updated_at',
         )

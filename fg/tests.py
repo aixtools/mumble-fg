@@ -16,7 +16,7 @@ from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cu
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
-from fg.models import MumbleServer, MumbleSession, MumbleUser
+from fg.models import MumbleUser
 from fg.runtime import RuntimeRegistration, RuntimeServer
 from fg.views import (
     _get_mumble_username,
@@ -46,6 +46,8 @@ class _JsonResponseStub:
 
 
 def _make_server(**kwargs):
+    from fg.models import resolve_murmur_model
+    MumbleServer = resolve_murmur_model('MumbleServer')
     defaults = dict(
         name='Test Server',
         address='mumble.example.com:64738',
@@ -198,19 +200,6 @@ class ComputeDisplayNameTest(TestCase):
 
 # ── Model ───────────────────────────────────────────────────────────
 
-class MumbleServerModelTest(TestCase):
-    def test_str(self):
-        server = _make_server(name='Fleet Comms')
-        self.assertEqual(str(server), 'Fleet Comms')
-
-    def test_ordering(self):
-        s2 = _make_server(name='Bravo', display_order=2)
-        s1 = _make_server(name='Alpha', display_order=1, address='a.example.com:64738')
-        servers = list(MumbleServer.objects.all())
-        self.assertEqual(servers[0], s1)
-        self.assertEqual(servers[1], s2)
-
-
 class MumbleModelTest(TestCase):
     def setUp(self):
         self.server = _make_server()
@@ -281,67 +270,6 @@ class MumbleModelTest(TestCase):
             Permission.objects.filter(content_type=content_type).values_list('codename', flat=True)
         )
         self.assertIn('manage_mumble_admin', codenames)
-
-
-class MumbleSessionModelTest(TestCase):
-    def setUp(self):
-        self.server = _make_server()
-
-    def test_str(self):
-        user = User.objects.create_user('pulseuser', password='pass')
-        mumble_user = MumbleUser.objects.create(
-            user=user,
-            server=self.server,
-            username='Pulse_User',
-            pwhash='h',
-        )
-        session = MumbleSession.objects.create(
-            server=self.server,
-            mumble_user=mumble_user,
-            session_id=91,
-            username='Pulse_User',
-            connected_at=timezone.now(),
-            last_seen=timezone.now(),
-            last_state=timezone.now(),
-        )
-        self.assertEqual(str(session), 'Test Server:Pulse_User#91')
-
-    def test_unique_active_session(self):
-        user = User.objects.create_user('pulseuser', password='pass')
-        mumble_user = MumbleUser.objects.create(
-            user=user,
-            server=self.server,
-            username='Pulse_User',
-            pwhash='h',
-        )
-        MumbleSession.objects.create(
-            server=self.server,
-            mumble_user=mumble_user,
-            session_id=91,
-            username='Pulse_User',
-            connected_at=timezone.now(),
-            last_seen=timezone.now(),
-            last_state=timezone.now(),
-        )
-        from django.db import IntegrityError
-        with self.assertRaises(IntegrityError):
-            MumbleSession.objects.create(
-                server=self.server,
-                mumble_user=mumble_user,
-                session_id=91,
-                username='Pulse_User',
-                connected_at=timezone.now(),
-                last_seen=timezone.now(),
-                last_state=timezone.now(),
-            )
-
-    def test_custom_permissions_exist(self):
-        content_type = ContentType.objects.get_for_model(MumbleSession)
-        codenames = set(
-            Permission.objects.filter(content_type=content_type).values_list('codename', flat=True)
-        )
-        self.assertIn('view_mumble_presence', codenames)
-        self.assertIn('view_mumble_presence_history', codenames)
 
 
 class ControlClientAuthTest(TestCase):
@@ -1099,98 +1027,6 @@ class MumbleManagePermissionsViewTest(TestCase):
         self.assertContains(response, 'Action')
         self.assertContains(response, 'Grant Admin')
         self.assertContains(response, 'Sync Contract Metadata')
-
-
-@override_settings(**_NO_REDIS)
-class MumbleManagePresenceColumnsViewTest(TestCase):
-    def setUp(self):
-        self.viewer = _make_member('presenceviewer')
-        self.client.force_login(self.viewer)
-        self.server = _make_server()
-        self.target_user = _make_regular_member('cubepilot')
-        observed_at = timezone.now()
-        self.mu = MumbleUser.objects.create(
-            user=self.target_user,
-            server=self.server,
-            username='Translated_Pilot',
-            display_name='Translated Pilot',
-            pwhash='h',
-            mumble_userid=904,
-            last_authenticated=observed_at - timedelta(minutes=10),
-            last_connected=observed_at - timedelta(minutes=9),
-            last_seen=observed_at - timedelta(minutes=1),
-            last_spoke=observed_at - timedelta(seconds=20),
-        )
-        MumbleSession.objects.create(
-            server=self.server,
-            mumble_user=self.mu,
-            session_id=41,
-            mumble_userid=904,
-            username='Translated_Pilot',
-            channel_id=7,
-            priority_speaker=True,
-            connected_at=observed_at - timedelta(minutes=9),
-            last_seen=observed_at - timedelta(minutes=1),
-            last_state=observed_at - timedelta(minutes=1),
-            last_spoke=observed_at - timedelta(seconds=20),
-        )
-        MumbleSession.objects.create(
-            server=self.server,
-            mumble_user=self.mu,
-            session_id=42,
-            mumble_userid=904,
-            username='Translated_Pilot',
-            channel_id=8,
-            priority_speaker=False,
-            connected_at=observed_at - timedelta(minutes=8),
-            last_seen=observed_at - timedelta(minutes=1),
-            last_state=observed_at - timedelta(minutes=1),
-            last_spoke=observed_at - timedelta(seconds=45),
-        )
-
-    def test_manage_view_exposes_presence_columns(self):
-        response = self.client.get(reverse('mumble:manage'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Pilot Account')
-        self.assertContains(response, 'Murmur ID')
-        self.assertContains(response, 'Last Auth')
-        self.assertContains(response, 'Last Connected')
-        self.assertContains(response, 'Last Seen')
-        self.assertContains(response, 'Last Spoke')
-        self.assertContains(response, 'Active Sessions')
-        self.assertContains(response, 'Priority Speaker')
-        self.assertContains(response, f'cubepilot (#{self.target_user.pk})')
-
-        mumble_users = list(response.context['mumble_users'])
-        self.assertEqual(len(mumble_users), 1)
-        self.assertEqual(mumble_users[0].active_session_count, 2)
-        self.assertTrue(mumble_users[0].has_priority_speaker)
-        self.assertContains(response, 'YES', count=1)
-
-    def test_staff_alliance_leader_can_view_action_column(self):
-        viewer = _make_member('leaderstaff')
-        _grant_alliance_leader_group(viewer)
-        self.client.force_login(viewer)
-
-        response = self.client.get(reverse('mumble:manage'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Action')
-        self.assertContains(response, 'Grant Admin')
-
-    def test_perm_only_user_can_view_action_column(self):
-        viewer = _make_regular_member('permviewer')
-        _make_char(viewer)
-        permission = Permission.objects.get(codename='manage_mumble_admin')
-        viewer.user_permissions.add(permission)
-        self.client.force_login(viewer)
-
-        response = self.client.get(reverse('mumble:manage'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Action')
-        self.assertContains(response, 'Grant Admin')
 
 
 # ── Mumble group sync helpers ───────────────────────────────────────

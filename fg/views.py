@@ -2,7 +2,6 @@ import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Exists, OuterRef, Q
 from django.http import Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.translation import gettext as _
@@ -10,7 +9,7 @@ from django.views.decorators.http import require_POST
 
 from .control import BgControlClient, MurmurSyncError
 from .host import get_host_adapter
-from .models import MumbleServer, MumbleSession, MumbleUser, MurmurModelLookupError, resolve_murmur_models
+from .models import MumbleUser, MurmurModelLookupError, resolve_murmur_models
 from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers, safe_registration_inventory
 
 logger = logging.getLogger(__name__)
@@ -108,9 +107,6 @@ def _host_murmur_models_available() -> bool:
 
 
 def _resolve_server(server_id):
-    if _host_murmur_models_available():
-        return get_object_or_404(MumbleServer, pk=server_id, is_active=True)
-
     server = next((server for server in safe_list_servers() if server.pk == int(server_id)), None)
     if server is None or not server.is_active:
         raise Http404()
@@ -411,40 +407,19 @@ def _can_manage_mumble_admin(user):
 def mumble_manage(request):
     if not _can_manage_mumble(request.user):
         return HttpResponseForbidden()
-    if _host_murmur_models_available():
-        active_priority_session = MumbleSession.objects.filter(
-            mumble_user=OuterRef('pk'),
-            is_active=True,
-            priority_speaker=True,
+    servers = safe_list_servers()
+    order_map = {server.pk: index for index, server in enumerate(servers)}
+    mumble_users = get_runtime_service().attach_users(
+        safe_registration_inventory(servers=servers)
+    )
+    mumble_users.sort(
+        key=lambda registration: (
+            order_map.get(registration.server_id, 999999),
+            str(getattr(registration, 'username', '') or '').lower(),
         )
-        mumble_users = (
-            MumbleUser.objects
-            .filter(server__is_active=True)
-            .select_related('user', 'server')
-            .annotate(
-                active_session_count=Count(
-                    'murmur_sessions',
-                    filter=Q(murmur_sessions__is_active=True),
-                    distinct=True,
-                ),
-                has_priority_speaker=Exists(active_priority_session),
-            )
-            .order_by('server__display_order', 'username')
-        )
-    else:
-        servers = safe_list_servers()
-        order_map = {server.pk: index for index, server in enumerate(servers)}
-        mumble_users = get_runtime_service().attach_users(
-            safe_registration_inventory(servers=servers)
-        )
-        mumble_users.sort(
-            key=lambda registration: (
-                order_map.get(registration.server_id, 999999),
-                str(getattr(registration, 'username', '') or '').lower(),
-            )
-        )
+    )
     can_manage_contract = request.user.is_superuser
-    if can_manage_contract and _host_murmur_models_available():
+    if can_manage_contract:
         probe_rows_by_key = {}
         for pkid in sorted({mumble_user.user_id for mumble_user in mumble_users}):
             try:
