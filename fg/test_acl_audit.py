@@ -11,6 +11,7 @@ from django.urls import reverse
 
 from accounts.models import UserProfile
 from fg.admin import AccessRuleAdmin
+from fg.control import MurmurSyncError
 from fg.models import (
     ACL_AUDIT_ACTION_CREATE,
     ACL_AUDIT_ACTION_DELETE,
@@ -218,6 +219,22 @@ class ACLAuditTest(TestCase):
         self.assertEqual(data['status'], 'completed')
         self.assertEqual(data['total'], 1)
         self.assertIn('ACL synchronized to BG', data['message'])
+
+    @patch('fg.views._sync_acl_rules_after_change', side_effect=MurmurSyncError('Control endpoint unreachable: connection refused'))
+    def test_manual_sync_ajax_reports_bg_unavailable(self, mock_sync_acl_rules_after_change):
+        _grant_acl_perm(self.user, 'view_accessrule')
+        _grant_acl_perm(self.user, 'change_accessrule')
+        AccessRule.objects.create(entity_id=123456, entity_type='pilot', deny=False, note='seed')
+
+        response = self.client.post(
+            reverse('mumble:acl_sync'),
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 503)
+        data = response.json()
+        self.assertEqual(data['error'], 'BG unavailable')
+        self.assertTrue(data['bg_unavailable'])
 
     @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
     def test_periodic_command_logs_audit_entry(self, mock_sync_access_rules):

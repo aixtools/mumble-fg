@@ -76,9 +76,9 @@ whole account is denied — unless a pilot-level allow overrides it.
 
 The ACL panel provides two on-demand pilot lists:
 
-- **Eligible Pilots** — all characters matched by the current rules: members of
-  allowed alliances (minus denied corps and denied pilots), plus individually
-  allowed pilots.
+- **Eligible Pilots** — one row per eligible account, showing the main
+  character first and any explicitly allowed non-main alts underneath. Alliance
+  or corp allowance by itself does not list every alt on the account.
 - **Blocked Pilots** — only characters **explicitly** hit by a deny rule
   (denied alliance, denied corp, or individually denied pilot). Characters in
   unlisted alliances are implicitly denied but do **not** appear on this list —

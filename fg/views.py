@@ -646,6 +646,20 @@ def _acl_sync_failure_message(request, exc):
     )
 
 
+def _bg_unavailable_error(exc):
+    message = str(exc or '')
+    lowered = message.lower()
+    return (
+        'control endpoint unreachable' in lowered
+        or 'connection refused' in lowered
+        or 'timed out' in lowered
+        or 'timedout' in lowered
+        or 'control request failed (502)' in lowered
+        or 'control request failed (503)' in lowered
+        or 'control request failed (504)' in lowered
+    )
+
+
 def _resolve_name_for_rule(rule):
     """Resolve an entity name for display. Returns the name or '-'."""
     from .admin import _get_eve_character_model, _get_db_for_eve
@@ -943,7 +957,7 @@ def _main_character_rows(EveCharacter, db, user_ids):
     return mains
 
 
-def _blocked_main_list(EveCharacter, db, rs):
+def _account_rule_decisions(EveCharacter, db, rs):
     account_rules = {}
     for row in _matching_character_rows(EveCharacter, db, rs):
         matches = _explicit_rule_matches(rs, row)
@@ -957,8 +971,11 @@ def _blocked_main_list(EveCharacter, db, rs):
                 'detail': match['detail'],
             }
             user_rules[match['action']] = _prefer_denial_reason(current, reason)
+    return account_rules
 
-    blocked_by_user = {
+
+def _blocked_user_reasons(account_rules):
+    return {
         user_id: rules['deny']
         for user_id, rules in account_rules.items()
         if rules['allow']
@@ -966,6 +983,9 @@ def _blocked_main_list(EveCharacter, db, rs):
         and _DENIAL_REASON_RANK[rules['deny']['reason_type']] >= _DENIAL_REASON_RANK[rules['allow']['reason_type']]
     }
 
+
+def _blocked_main_list(EveCharacter, db, rs):
+    blocked_by_user = _blocked_user_reasons(_account_rule_decisions(EveCharacter, db, rs))
     if not blocked_by_user:
         return []
 
@@ -993,6 +1013,50 @@ def _blocked_main_list(EveCharacter, db, rs):
     return pilots
 
 
+def _eligible_account_list(EveCharacter, db, rs):
+    blocked_user_ids = set(_blocked_user_reasons(_account_rule_decisions(EveCharacter, db, rs)))
+    allowed_rows_by_user = {}
+    for row in _matching_character_rows(EveCharacter, db, rs):
+        if row['user_id'] in blocked_user_ids:
+            continue
+        match = _explicit_rule_match(rs, row) or {}
+        if match.get('action') != 'allow':
+            continue
+        allowed_rows_by_user.setdefault(row['user_id'], []).append((row, match))
+
+    if not allowed_rows_by_user:
+        return []
+
+    mains = _main_character_rows(EveCharacter, db, allowed_rows_by_user.keys())
+    pilots = []
+    for user_id, allowed_rows in allowed_rows_by_user.items():
+        main = mains.get(user_id)
+        if not main:
+            continue
+
+        alt_lines = sorted(
+            {
+                row['character_name']
+                for row, match in allowed_rows
+                if match['reason_type'] == ENTITY_TYPE_PILOT
+                and row['character_id'] != main['character_id']
+            },
+            key=str.lower,
+        )
+        pilot_lines = [main['character_name'], *alt_lines]
+        pilots.append(
+            {
+                'character_name': main['character_name'],
+                'pilot_lines': pilot_lines,
+                'corporation': main['corporation_name'] or '-',
+                'alliance': main['alliance_name'] or '-',
+            }
+        )
+
+    pilots.sort(key=lambda pilot: pilot['character_name'].lower())
+    return pilots
+
+
 @login_required
 def acl_eligible(request):
     if not _can_view_acl(request.user):
@@ -1003,11 +1067,7 @@ def acl_eligible(request):
         return _no_cache_json({'error': 'EVE data unavailable'}, status=503)
 
     rs = _acl_rule_sets()
-    pilots = _char_list_from_rows(
-        row
-        for row in _matching_character_rows(EveCharacter, db, rs)
-        if (_explicit_rule_match(rs, row) or {}).get('action') == 'allow'
-    )
+    pilots = _eligible_account_list(EveCharacter, db, rs)
     return _no_cache_json({'pilots': pilots, 'count': len(pilots)})
 
 
@@ -1041,12 +1101,24 @@ def acl_sync(request):
             trigger='manual',
         )
     except MurmurSyncError as exc:
+        bg_unavailable = _bg_unavailable_error(exc)
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            if bg_unavailable:
+                return JsonResponse(
+                    {'error': _('BG unavailable'), 'bg_unavailable': True},
+                    status=503,
+                )
             return JsonResponse(
-                {'error': _('ACL sync failed: %(error)s.') % {'error': str(exc)}},
+                {
+                    'error': _('ACL sync failed: %(error)s.') % {'error': str(exc)},
+                    'bg_unavailable': False,
+                },
                 status=502,
             )
-        messages.warning(request, _('ACL sync failed: %(error)s.') % {'error': str(exc)})
+        if bg_unavailable:
+            messages.warning(request, _('BG unavailable'))
+        else:
+            messages.warning(request, _('ACL sync failed: %(error)s.') % {'error': str(exc)})
     else:
         total = response.get('total')
         if not isinstance(total, int):

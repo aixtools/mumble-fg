@@ -19,6 +19,7 @@
             data-default-label="{% trans 'Sync BG' %}"
             data-syncing-label="{% trans 'Syncing' %}"
             data-synced-label="{% trans 'Synced' %}"
+            data-unavailable-label="{% trans 'BG unavailable' %}"
         >{% trans "Sync BG" %}</button>
         <span id="acl-sync-status" style="font-size: 13px; color: var(--text-secondary);"></span>
     </form>
@@ -183,6 +184,13 @@
     const syncStatus = document.getElementById('acl-sync-status');
 
     if (syncForm && syncButton && syncStatus) {
+        function setSyncUnavailable() {
+            syncButton.disabled = true;
+            syncButton.textContent = syncButton.dataset.unavailableLabel;
+            syncStatus.textContent = syncButton.dataset.unavailableLabel;
+            syncStatus.style.color = '#e67e22';
+        }
+
         syncForm.addEventListener('submit', function(event) {
             event.preventDefault();
 
@@ -200,25 +208,56 @@
                 },
             })
             .then(function(response) {
-                return response.json().then(function(data) {
-                    return { ok: response.ok, data: data };
+                return response.text().then(function(text) {
+                    const contentType = response.headers.get('content-type') || '';
+                    let data = null;
+
+                    if (contentType.indexOf('application/json') !== -1) {
+                        try {
+                            data = JSON.parse(text);
+                        } catch (error) {
+                            data = null;
+                        }
+                    }
+
+                    return {
+                        ok: response.ok,
+                        status: response.status,
+                        data: data,
+                    };
                 });
             })
             .then(function(result) {
+                if (!result.data) {
+                    if (result.status >= 502) {
+                        const error = new Error(syncButton.dataset.unavailableLabel);
+                        error.bgUnavailable = true;
+                        throw error;
+                    }
+                    throw new Error('Sync failed');
+                }
                 if (!result.ok || result.data.error) {
-                    throw new Error(result.data.error || 'Sync failed');
+                    const error = new Error(result.data.error || 'Sync failed');
+                    error.bgUnavailable = !!result.data.bg_unavailable;
+                    throw error;
                 }
                 syncButton.textContent = syncButton.dataset.syncedLabel;
                 syncStatus.textContent = result.data.message || syncButton.dataset.syncedLabel;
                 syncStatus.style.color = '#2ecc71';
             })
             .catch(function(error) {
+                if (error.bgUnavailable) {
+                    setSyncUnavailable();
+                    return;
+                }
                 syncButton.textContent = syncButton.dataset.defaultLabel;
                 syncStatus.textContent = error.message;
                 syncStatus.style.color = '#e74c3c';
             })
             .finally(function() {
-                syncButton.disabled = false;
+                if (syncButton.textContent !== syncButton.dataset.unavailableLabel) {
+                    syncButton.disabled = false;
+                }
             });
         });
     }
@@ -227,6 +266,18 @@
         var d = document.createElement('div');
         d.appendChild(document.createTextNode(text));
         return d.innerHTML;
+    }
+
+    function renderPilotCell(pilot) {
+        if (Array.isArray(pilot.pilot_lines) && pilot.pilot_lines.length > 0) {
+            return pilot.pilot_lines.map(function(name, index) {
+                var style = index === 0
+                    ? 'color:var(--text-primary);font-size:13px;'
+                    : 'color:var(--text-secondary);font-size:12px;margin-top:2px;';
+                return '<div style="' + style + '">' + escapeH(name) + '</div>';
+            }).join('');
+        }
+        return escapeH(pilot.display_name || pilot.character_name);
     }
 
     function renderPilotTable(body, countEl, url, emptyMsg) {
@@ -250,9 +301,8 @@
                     + '<th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:11px;text-transform:uppercase;">Corporation</th>'
                     + '<th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:11px;text-transform:uppercase;">Alliance</th></tr>';
                 data.pilots.forEach(function(p) {
-                    var pilotName = p.display_name || p.character_name;
                     html += '<tr style="border-bottom:1px solid var(--border-color);">'
-                        + '<td style="padding:6px 8px;color:var(--text-primary);font-size:13px;">' + escapeH(pilotName) + '</td>'
+                        + '<td style="padding:6px 8px;">' + renderPilotCell(p) + '</td>'
                         + '<td style="padding:6px 8px;color:var(--text-secondary);font-size:13px;">' + escapeH(p.corporation) + '</td>'
                         + '<td style="padding:6px 8px;color:var(--text-secondary);font-size:13px;">' + escapeH(p.alliance) + '</td></tr>';
                 });
