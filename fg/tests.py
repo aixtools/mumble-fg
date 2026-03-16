@@ -1248,3 +1248,139 @@ class ProfileContextTest(TestCase):
         self.assertEqual(len(data), 2)
         self.assertContains(resp, 'Test Server')
         self.assertContains(resp, 'Server 2')
+
+
+# ── ACL tests ─────────────────────────────────────────────────────
+
+from fg.models import AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT
+
+
+@override_settings(**_NO_REDIS)
+class AccessRuleModelTest(TestCase):
+    def test_create_allow_rule(self):
+        rule = AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE)
+        self.assertFalse(rule.deny)
+        self.assertEqual(str(rule), 'ALLOW alliance 99013537')
+
+    def test_create_deny_rule(self):
+        rule = AccessRule.objects.create(entity_id=98618881, entity_type=ENTITY_TYPE_CORPORATION, deny=True)
+        self.assertTrue(rule.deny)
+        self.assertEqual(str(rule), 'DENY corporation 98618881')
+
+    def test_entity_id_unique(self):
+        AccessRule.objects.create(entity_id=12345678, entity_type=ENTITY_TYPE_PILOT)
+        from django.db import IntegrityError
+        with self.assertRaises(IntegrityError):
+            AccessRule.objects.create(entity_id=12345678, entity_type=ENTITY_TYPE_PILOT)
+
+
+@override_settings(**_NO_REDIS)
+class ACLBatchCreateViewTest(TestCase):
+    def setUp(self):
+        self.user = _make_member()
+        self.user.is_staff = True
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def test_batch_create(self):
+        resp = self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({
+                'entities': [
+                    {'entity_id': 99013537, 'entity_type': 'alliance'},
+                    {'entity_id': 99013941, 'entity_type': 'alliance'},
+                ],
+                'note': 'test batch',
+                'deny': False,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['created'], 2)
+        self.assertEqual(data['skipped'], 0)
+        self.assertEqual(AccessRule.objects.count(), 2)
+
+    def test_batch_create_skips_duplicates(self):
+        AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE)
+        resp = self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({
+                'entities': [{'entity_id': 99013537, 'entity_type': 'alliance'}],
+                'note': '',
+                'deny': False,
+            }),
+            content_type='application/json',
+        )
+        data = resp.json()
+        self.assertEqual(data['created'], 0)
+        self.assertEqual(data['skipped'], 1)
+        self.assertIn(99013537, data['skipped_ids'])
+
+    def test_batch_create_sets_created_by(self):
+        self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({
+                'entities': [{'entity_id': 12345678, 'entity_type': 'pilot'}],
+                'note': '',
+                'deny': False,
+            }),
+            content_type='application/json',
+        )
+        rule = AccessRule.objects.get(entity_id=12345678)
+        self.assertEqual(rule.created_by, self.user.username)
+
+    def test_batch_create_forbidden_for_non_staff(self):
+        self.user.is_staff = False
+        self.user.save()
+        resp = self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({'entities': [{'entity_id': 1, 'entity_type': 'alliance'}], 'deny': False}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+
+@override_settings(**_NO_REDIS)
+class ACLDeleteViewTest(TestCase):
+    def setUp(self):
+        self.user = _make_member()
+        self.user.is_staff = True
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def test_delete_rule(self):
+        rule = AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE)
+        resp = self.client.post(reverse('mumble:acl_delete', args=[rule.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(AccessRule.objects.filter(pk=rule.pk).exists())
+
+    def test_delete_forbidden_for_non_staff(self):
+        rule = AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE)
+        self.user.is_staff = False
+        self.user.save()
+        resp = self.client.post(reverse('mumble:acl_delete', args=[rule.pk]))
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(AccessRule.objects.filter(pk=rule.pk).exists())
+
+
+@override_settings(**_NO_REDIS)
+class ACLListViewTest(TestCase):
+    def setUp(self):
+        self.user = _make_member()
+        self.user.is_staff = True
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def test_list_view(self):
+        AccessRule.objects.create(entity_id=99013537, entity_type=ENTITY_TYPE_ALLIANCE, note='test')
+        resp = self.client.get(reverse('mumble:acl_list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.context['rules']), 1)
+        self.assertTrue(resp.context['can_edit'])
+
+    def test_list_forbidden_for_non_staff(self):
+        self.user.is_staff = False
+        self.user.save()
+        resp = self.client.get(reverse('mumble:acl_list'))
+        self.assertEqual(resp.status_code, 403)

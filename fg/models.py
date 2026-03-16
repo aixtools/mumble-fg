@@ -97,17 +97,20 @@ ENTITY_TYPE_CHOICES = [
 
 class AccessRule(models.Model):
     """
-    Eligibility decision table for Mumble access.
+    Access control list for Mumble eligibility.
 
     Precedence (most specific wins):
-      1. Pilot allow/block overrides everything
-      2. Corp block applies if no pilot-level override
+      1. Pilot allow/deny overrides everything
+      2. Corp deny applies if no pilot-level override
       3. Alliance allow is the baseline (alliance in = permitted)
 
-    Default is permit (block=False). When block=True the entity is denied.
+    Default is permit (deny=False). When deny=True the entity is denied.
     EVE IDs are globally unique so entity_id is unique across the table.
     Block checks are account-wide: main or any alt matching triggers denial
     unless a pilot-level allow overrides it.
+
+    TODO: FG-defined permission model for non-staff ACL manage/view access,
+    keyed by pilot pkid (resolved via main character).
     """
 
     entity_id = models.BigIntegerField(
@@ -119,14 +122,14 @@ class AccessRule(models.Model):
         choices=ENTITY_TYPE_CHOICES,
         help_text='Deducible from ID range but kept for query convenience.',
     )
-    block = models.BooleanField(
+    deny = models.BooleanField(
         default=False,
-        help_text='False = permit (default). True = deny access.',
+        help_text='Off = permit (default). On = deny access.',
     )
     note = models.TextField(
         blank=True,
         default='',
-        help_text='Admin notes (e.g. reason for block, ticket reference).',
+        help_text='Admin notes (e.g. reason for denial, ticket reference).',
     )
     created_by = models.CharField(
         max_length=255,
@@ -140,9 +143,11 @@ class AccessRule(models.Model):
     class Meta:
         db_table = 'fg_access_rule'
         ordering = ['entity_type', 'entity_id']
+        verbose_name = 'access control entry'
+        verbose_name_plural = 'access control list'
 
     def __str__(self):
-        action = 'BLOCK' if self.block else 'ALLOW'
+        action = 'DENY' if self.deny else 'ALLOW'
         return f'{action} {self.entity_type} {self.entity_id}'
 
 

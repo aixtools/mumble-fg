@@ -19,4 +19,4 @@ include-package-data = true
 include = ["fg*"]
 
 [tool.setuptools.package-data]
-fg = ["templates/fg/*.html", "templates/fg/panels/*.html"]
+fg = ["templates/fg/*.html", "templates/fg/panels/*.html", "templates/admin/**/*.html"]

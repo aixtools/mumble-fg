@@ -1,0 +1,367 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Mumble ACL" %}{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display: flex; align-items: center; gap: 12px;">
+    <h1 style="margin: 0;">{% trans "Mumble ACL" %}</h1>
+    <button type="button" id="eligible-btn" class="btn btn-xs btn-outline" style="padding: 4px 12px; font-size: 12px;">{% trans "Eligible Pilots" %}</button>
+    <button type="button" id="blocked-btn" class="btn btn-xs btn-outline" style="padding: 4px 12px; font-size: 12px; color: #e74c3c; border-color: #e74c3c;">{% trans "Blocked Pilots" %}</button>
+</div>
+
+<div style="padding: 0 2rem 2rem;">
+
+    {# Eligible pilots panel (hidden until clicked) #}
+    <div id="eligible-panel" style="display: none; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 1rem;">
+        <div style="padding: 12px 16px; border-bottom: 2px solid var(--primary-color); background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%); display: flex; align-items: center; justify-content: space-between;">
+            <h2 style="color: var(--primary-color); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0;">
+                {% trans "Eligible Pilots" %} <span id="eligible-count" style="font-weight: 400; color: var(--text-secondary);"></span>
+            </h2>
+            <button type="button" id="eligible-close" style="background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 16px; padding: 0 4px;" title="Close">&times;</button>
+        </div>
+        <div id="eligible-body" style="padding: 16px; max-height: 400px; overflow-y: auto;">
+            <p style="color: var(--text-secondary); font-size: 13px;">{% trans "Loading..." %}</p>
+        </div>
+    </div>
+
+    {# Blocked pilots panel (hidden until clicked) #}
+    <div id="blocked-panel" style="display: none; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 1rem;">
+        <div style="padding: 12px 16px; border-bottom: 2px solid #e74c3c; background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%); display: flex; align-items: center; justify-content: space-between;">
+            <h2 style="color: #e74c3c; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0;">
+                {% trans "Blocked Pilots" %} <span id="blocked-count" style="font-weight: 400; color: var(--text-secondary);"></span>
+            </h2>
+            <button type="button" id="blocked-close" style="background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 16px; padding: 0 4px;" title="Close">&times;</button>
+        </div>
+        <div id="blocked-body" style="padding: 16px; max-height: 400px; overflow-y: auto;">
+            <p style="color: var(--text-secondary); font-size: 13px;">{% trans "Loading..." %}</p>
+        </div>
+    </div>
+
+    {# Eligibility rules help #}
+    <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 1rem;">
+        <div style="padding: 12px 16px; border-bottom: 2px solid var(--primary-color); background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%);">
+            <h2 style="color: var(--primary-color); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0;">{% trans "Eligibility Rules" %}</h2>
+        </div>
+        <div style="padding: 16px; color: var(--text-secondary); font-size: 13px;">
+            <p style="margin: 0 0 8px;">{% trans "Precedence (most specific wins):" %} <strong>{% trans "Pilot" %}</strong> &gt; <strong>{% trans "Corporation" %}</strong> &gt; <strong>{% trans "Alliance" %}</strong></p>
+            <ul style="margin: 0 0 8px; padding-left: 1.5rem;">
+                <li>{% trans "Alliance: deny=off permits. deny=on blocks any account with a main or alt in that alliance. Unlisted alliances are implicitly denied." %}</li>
+                <li>{% trans "Corporation: deny=on blocks a corp within an allowed alliance." %}</li>
+                <li>{% trans "Pilot: overrides corp and alliance. deny=off rescues a pilot even if their corp or alliance is denied." %}</li>
+            </ul>
+            <p style="margin: 0 0 8px;">{% trans "Deny checks are account-wide: if main or any alt matches a deny rule, the entire account is denied — unless a pilot-level allow overrides it." %}</p>
+            <p style="margin: 0; font-style: italic;">{% trans "Eligible Pilots shows characters matched by current rules. Blocked Pilots shows only those explicitly denied — characters in unlisted alliances are implicitly denied but not listed." %}</p>
+        </div>
+    </div>
+
+    {% if can_edit %}
+    {# Search panel #}
+    <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 1rem;">
+        <div style="padding: 12px 16px; border-bottom: 2px solid var(--primary-color); background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%);">
+            <h2 style="color: var(--primary-color); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0;">{% trans "Search EVE Entities" %}</h2>
+        </div>
+        <div style="padding: 16px;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+                <input type="text" id="eve-search-input" placeholder="{% trans 'Alliance, corporation, or pilot name / ticker...' %}"
+                       style="width:320px;padding:6px 10px;background:var(--darker-bg);border:1px solid var(--border-color);border-radius:4px;color:var(--text-color);" autocomplete="off">
+                <select id="eve-search-type" style="padding:6px 10px;background:var(--darker-bg);border:1px solid var(--border-color);border-radius:4px;color:var(--text-color);">
+                    <option value="">{% trans "All types" %}</option>
+                    <option value="alliance">{% trans "Alliance" %}</option>
+                    <option value="corporation">{% trans "Corporation" %}</option>
+                    <option value="pilot">{% trans "Pilot" %}</option>
+                </select>
+                <button type="button" id="eve-search-btn" class="btn btn-xs btn-outline" style="padding:6px 16px;">{% trans "Search" %}</button>
+            </div>
+            <div id="eve-search-results" style="max-height:300px;overflow-y:auto;"></div>
+            <div id="eve-batch-controls" style="display:none;margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <label style="color:var(--text-secondary);font-size:13px;">
+                    <input type="checkbox" id="acl-deny-checkbox"> {% trans "Deny" %}
+                </label>
+                <input type="text" id="acl-note-input" placeholder="{% trans 'Note (optional)...' %}"
+                       style="width:240px;padding:6px 10px;background:var(--darker-bg);border:1px solid var(--border-color);border-radius:4px;color:var(--text-color);font-size:13px;">
+                <button type="button" id="eve-batch-submit" class="btn btn-xs btn-outline" style="padding:6px 16px;font-weight:bold;">{% trans "Create Selected" %}</button>
+                <span id="eve-batch-status" style="font-size:13px;"></span>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# Current ACL table #}
+    <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px;">
+        <div style="padding: 12px 16px; border-bottom: 2px solid var(--primary-color); background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%);">
+            <h2 style="color: var(--primary-color); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0;">{% trans "Access Control List" %}</h2>
+        </div>
+        <div style="padding: 16px;">
+            {% if rules %}
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Name" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Type" %}</th>
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Access" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Note" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "By" %}</th>
+                        <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Updated" %}</th>
+                        {% if can_edit %}
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Action" %}</th>
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rule in rules %}
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <td style="padding: 8px; color: var(--text-primary); font-size: 13px;">{{ rule.resolved_name }}</td>
+                        <td style="padding: 8px;">
+                            {% if rule.entity_type == 'alliance' %}
+                                <span style="background: #2196f3; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;">{{ rule.get_entity_type_display }}</span>
+                            {% elif rule.entity_type == 'corporation' %}
+                                <span style="background: #ff9800; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;">{{ rule.get_entity_type_display }}</span>
+                            {% else %}
+                                <span style="background: #9c27b0; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;">{{ rule.get_entity_type_display }}</span>
+                            {% endif %}
+                        </td>
+                        <td style="padding: 8px; text-align: center;">
+                            {% if can_edit %}
+                            <form method="post" action="{% url 'mumble:acl_toggle_deny' rule.pk %}" style="display: inline;">
+                                {% csrf_token %}
+                                {% if rule.deny %}
+                                    <button type="submit" style="background: rgba(231,76,60,0.2); color: #e74c3c; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700; border: 1px solid rgba(231,76,60,0.4); cursor: pointer;" title="Click to switch to Allow">{% trans "DENY" %}</button>
+                                {% else %}
+                                    <button type="submit" style="background: rgba(46,204,113,0.2); color: #2ecc71; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700; border: 1px solid rgba(46,204,113,0.4); cursor: pointer;" title="Click to switch to Deny">{% trans "ALLOW" %}</button>
+                                {% endif %}
+                            </form>
+                            {% else %}
+                                {% if rule.deny %}
+                                    <span style="background: rgba(231,76,60,0.2); color: #e74c3c; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">{% trans "DENY" %}</span>
+                                {% else %}
+                                    <span style="background: rgba(46,204,113,0.2); color: #2ecc71; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">{% trans "ALLOW" %}</span>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ rule.note }}</td>
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ rule.created_by }}</td>
+                        <td style="padding: 8px; color: var(--text-secondary); font-size: 12px;">{{ rule.updated_at|date:"Y-m-d H:i" }}</td>
+                        {% if can_edit %}
+                        <td style="padding: 8px; text-align: center;">
+                            <form method="post" action="{% url 'mumble:acl_delete' rule.pk %}" style="display: inline;">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-xs btn-outline" style="color: #e74c3c; border-color: #e74c3c;" onclick="return confirm('Delete this rule?');">{% trans "Delete" %}</button>
+                            </form>
+                        </td>
+                        {% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+                <p style="color: var(--text-secondary); font-size: 13px; margin: 0;">{% trans "No access control rules defined." %}</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    function escapeH(text) {
+        var d = document.createElement('div');
+        d.appendChild(document.createTextNode(text));
+        return d.innerHTML;
+    }
+
+    function renderPilotTable(body, countEl, url, emptyMsg) {
+        body.innerHTML = '<p style="color:var(--text-secondary);font-size:13px;">Loading...</p>';
+        countEl.textContent = '';
+        fetch(url + '?_=' + Date.now())
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) {
+                    body.innerHTML = '<p style="color:#e74c3c;font-size:13px;">' + escapeH(data.error) + '</p>';
+                    return;
+                }
+                countEl.textContent = '(' + data.count + ')';
+                if (data.count === 0) {
+                    body.innerHTML = '<p style="color:var(--text-secondary);font-size:13px;">' + emptyMsg + '</p>';
+                    return;
+                }
+                var html = '<table style="width:100%;border-collapse:collapse;">'
+                    + '<tr style="border-bottom:1px solid var(--border-color);">'
+                    + '<th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:11px;text-transform:uppercase;">Pilot</th>'
+                    + '<th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:11px;text-transform:uppercase;">Corporation</th>'
+                    + '<th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:11px;text-transform:uppercase;">Alliance</th></tr>';
+                data.pilots.forEach(function(p) {
+                    html += '<tr style="border-bottom:1px solid var(--border-color);">'
+                        + '<td style="padding:6px 8px;color:var(--text-primary);font-size:13px;">' + escapeH(p.character_name) + '</td>'
+                        + '<td style="padding:6px 8px;color:var(--text-secondary);font-size:13px;">' + escapeH(p.corporation) + '</td>'
+                        + '<td style="padding:6px 8px;color:var(--text-secondary);font-size:13px;">' + escapeH(p.alliance) + '</td></tr>';
+                });
+                body.innerHTML = html + '</table>';
+            })
+            .catch(function(err) {
+                body.innerHTML = '<p style="color:#e74c3c;font-size:13px;">Failed: ' + err + '</p>';
+            });
+    }
+
+    document.getElementById('eligible-btn').addEventListener('click', function() {
+        document.getElementById('eligible-panel').style.display = 'block';
+        renderPilotTable(
+            document.getElementById('eligible-body'),
+            document.getElementById('eligible-count'),
+            '{{ eligible_url }}',
+            'No eligible pilots found.'
+        );
+    });
+    document.getElementById('eligible-close').addEventListener('click', function() {
+        document.getElementById('eligible-panel').style.display = 'none';
+    });
+
+    document.getElementById('blocked-btn').addEventListener('click', function() {
+        document.getElementById('blocked-panel').style.display = 'block';
+        renderPilotTable(
+            document.getElementById('blocked-body'),
+            document.getElementById('blocked-count'),
+            '{{ blocked_url }}',
+            'No blocked pilots found.'
+        );
+    });
+    document.getElementById('blocked-close').addEventListener('click', function() {
+        document.getElementById('blocked-panel').style.display = 'none';
+    });
+})();
+</script>
+
+{% if can_edit %}
+<script>
+(function() {
+    const searchUrl = '{{ search_url }}';
+    const batchUrl = '{{ batch_url }}';
+    const csrfToken = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1]
+        || document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+    const input = document.getElementById('eve-search-input');
+    const typeSelect = document.getElementById('eve-search-type');
+    const btn = document.getElementById('eve-search-btn');
+    const resultsDiv = document.getElementById('eve-search-results');
+    const batchControls = document.getElementById('eve-batch-controls');
+    const batchSubmit = document.getElementById('eve-batch-submit');
+    const batchStatus = document.getElementById('eve-batch-status');
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(text));
+        return div.innerHTML;
+    }
+
+    function updateSelectAll() {
+        const all = resultsDiv.querySelectorAll('.eve-row-cb');
+        const checked = resultsDiv.querySelectorAll('.eve-row-cb:checked');
+        const selectAll = document.getElementById('eve-select-all');
+        if (selectAll) {
+            selectAll.checked = all.length > 0 && all.length === checked.length;
+            selectAll.indeterminate = checked.length > 0 && checked.length < all.length;
+        }
+        batchControls.style.display = checked.length > 0 ? 'flex' : 'none';
+    }
+
+    function doSearch() {
+        const q = input.value.trim();
+        if (q.length < 2) {
+            resultsDiv.innerHTML = '<p style="color:var(--text-secondary);">Enter at least 2 characters.</p>';
+            batchControls.style.display = 'none';
+            return;
+        }
+        const typeParam = typeSelect.value ? '&type=' + typeSelect.value : '';
+        fetch(searchUrl + '?q=' + encodeURIComponent(q) + typeParam)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.results || data.results.length === 0) {
+                    resultsDiv.innerHTML = '<p style="color:var(--text-secondary);">No matches found.</p>';
+                    batchControls.style.display = 'none';
+                    return;
+                }
+                const typeColors = { 'alliance': '#2196f3', 'corporation': '#ff9800', 'pilot': '#9c27b0' };
+                let html = '<table style="width:100%;border-collapse:collapse;">';
+                html += '<tr style="border-bottom:1px solid var(--border-color);">'
+                      + '<th style="padding:4px 8px;"><input type="checkbox" id="eve-select-all" title="Select all"></th>'
+                      + '<th style="text-align:left;padding:4px 8px;color:var(--text-secondary);font-size:11px;">Name</th>'
+                      + '<th style="text-align:left;padding:4px 8px;color:var(--text-secondary);font-size:11px;">Type</th>'
+                      + '<th style="text-align:left;padding:4px 8px;color:var(--text-secondary);font-size:11px;">ID</th></tr>';
+                data.results.forEach(function(r) {
+                    const color = typeColors[r.entity_type] || '#999';
+                    html += '<tr style="border-bottom:1px solid var(--border-color);">'
+                          + '<td style="padding:4px 8px;"><input type="checkbox" class="eve-row-cb"'
+                          + ' data-id="' + r.entity_id + '" data-type="' + r.entity_type + '"></td>'
+                          + '<td style="padding:4px 8px;color:var(--text-primary);font-size:13px;">' + escapeHtml(r.label) + '</td>'
+                          + '<td style="padding:4px 8px;"><span style="background:' + color
+                          + ';color:#fff;padding:1px 6px;border-radius:999px;font-size:11px;">'
+                          + escapeHtml(r.entity_type) + '</span></td>'
+                          + '<td style="padding:4px 8px;color:var(--text-secondary);font-size:13px;">' + r.entity_id + '</td></tr>';
+                });
+                html += '</table>';
+                resultsDiv.innerHTML = html;
+
+                document.getElementById('eve-select-all').addEventListener('change', function() {
+                    resultsDiv.querySelectorAll('.eve-row-cb').forEach(cb => { cb.checked = this.checked; });
+                    updateSelectAll();
+                });
+                resultsDiv.querySelectorAll('.eve-row-cb').forEach(cb => { cb.addEventListener('change', updateSelectAll); });
+                updateSelectAll();
+            })
+            .catch(function(err) {
+                resultsDiv.innerHTML = '<p style="color:#e74c3c;">Search failed: ' + err + '</p>';
+                batchControls.style.display = 'none';
+            });
+    }
+
+    batchSubmit.addEventListener('click', function() {
+        const checked = resultsDiv.querySelectorAll('.eve-row-cb:checked');
+        if (checked.length === 0) return;
+
+        const entities = [];
+        checked.forEach(cb => {
+            entities.push({ entity_id: parseInt(cb.getAttribute('data-id'), 10), entity_type: cb.getAttribute('data-type') });
+        });
+
+        const deny = document.getElementById('acl-deny-checkbox').checked;
+        const note = document.getElementById('acl-note-input').value.trim();
+
+        batchSubmit.disabled = true;
+        batchStatus.textContent = 'Creating...';
+        batchStatus.style.color = 'var(--text-secondary)';
+
+        fetch(batchUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+            body: JSON.stringify({ entities: entities, note: note, deny: deny }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            batchSubmit.disabled = false;
+            if (data.error) {
+                batchStatus.textContent = 'Error: ' + data.error;
+                batchStatus.style.color = '#e74c3c';
+                return;
+            }
+            let msg = data.created + ' created';
+            if (data.skipped > 0) msg += ', ' + data.skipped + ' already exist';
+            batchStatus.textContent = msg;
+            batchStatus.style.color = '#2ecc71';
+            if (data.created > 0) {
+                setTimeout(function() { window.location.reload(); }, 1000);
+            }
+        })
+        .catch(function(err) {
+            batchSubmit.disabled = false;
+            batchStatus.textContent = 'Failed: ' + err;
+            batchStatus.style.color = '#e74c3c';
+        });
+    });
+
+    btn.addEventListener('click', doSearch);
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

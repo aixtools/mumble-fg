@@ -47,30 +47,43 @@ Those seams should be redesigned explicitly rather than left shared implicitly.
 
 ## Pilot Eligibility Rules
 
-FG owns the access-control decision tables and pushes them to BG via the control channel.
+FG owns the access-control list (ACL) and pushes decisions to BG via the control channel.
 BG independently provisions Mumble accounts from these rules.
 
 ### Decision Tables (admin-managed in FG)
 
-- **Allowed alliances** — an alliance is either in or out (no partial alliance access)
-- **Blocked corps** — corps within an allowed alliance that are denied access
-- **Blocked pilots** — individual pilots within an allowed alliance that are denied access
-- **Allowed pilots** — individual pilot overrides that rescue access even when their corp is blocked
+- **Allowed alliances** — an alliance is either in or out (no partial alliance access). Alliances not listed are **implicitly denied**.
+- **Denied corps** — corps within an allowed alliance that are denied access.
+- **Denied pilots** — individual pilots denied access regardless of alliance/corp status.
+- **Allowed pilots** — individual pilot overrides that rescue access even when their corp or alliance is denied.
 
 ### Precedence (most specific wins)
 
-1. **Pilot allow/block** overrides everything
-2. **Corp block** applies if no pilot-level override exists
-3. **Alliance allow** is the baseline
+1. **Pilot allow/deny** overrides everything
+2. **Corp deny** applies if no pilot-level override exists
+3. **Alliance allow** is the baseline (unlisted alliances are implicitly denied)
 
-A blocked corp within an allowed alliance denies that corp's members — but an
+A denied corp within an allowed alliance blocks that corp's members — but an
 explicit pilot-level allow for a specific member of that corp restores their access.
 
 ### Account-wide enforcement
 
-Block checks apply across the **entire account**, not just the main character.
-If the main **or any alt** matches a blocked corp or pilot ID, the whole account
-is denied — unless a pilot-level allow overrides it.
+Deny checks apply across the **entire account**, not just the main character.
+If the main **or any alt** matches a deny rule (alliance, corp, or pilot), the
+whole account is denied — unless a pilot-level allow overrides it.
+
+### Eligible / Blocked pilot lists
+
+The ACL panel provides two on-demand pilot lists:
+
+- **Eligible Pilots** — all characters matched by the current rules: members of
+  allowed alliances (minus denied corps and denied pilots), plus individually
+  allowed pilots.
+- **Blocked Pilots** — only characters **explicitly** hit by a deny rule
+  (denied alliance, denied corp, or individually denied pilot). Characters in
+  unlisted alliances are implicitly denied but do **not** appear on this list —
+  the implicitly-denied set is effectively the entire EVE universe minus the
+  eligible set.
 
 Shared fg/bg naming and boundary conventions are documented in [docs/conventions.md](/home/michael/prj/mumble-fg/docs/conventions.md).
 Dev deploy/bootstrap guidance is documented in [docs/bootstrap-dev-deploy.md](/home/michael/prj/mumble-fg/docs/bootstrap-dev-deploy.md).

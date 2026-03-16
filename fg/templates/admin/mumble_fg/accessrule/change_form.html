@@ -1,0 +1,217 @@
+{% extends "admin/change_form.html" %}
+
+{% block after_field_sets %}
+{{ block.super }}
+
+<script>
+(function() {
+    const searchUrl = '{{ eve_search_url|default:"eve-entity-search/" }}';
+    const batchUrl = '{{ batch_create_url|default:"batch-create/" }}';
+    const csrfToken = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1]
+        || document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+    // Inject search widget after the first fieldset (eligibility rules help text)
+    const fieldsets = document.querySelectorAll('fieldset.module');
+    if (fieldsets.length < 2) return;
+
+    const searchFieldset = document.createElement('fieldset');
+    searchFieldset.className = 'module';
+    searchFieldset.id = 'eve-entity-lookup';
+    searchFieldset.innerHTML =
+        '<h2>Search EVE Entities</h2>'
+        + '<div class="form-row">'
+        + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'
+        + '<input type="text" id="eve-search-input" placeholder="Alliance, corporation, or pilot name..."'
+        + ' style="width:320px;padding:6px 10px;" autocomplete="off">'
+        + '<select id="eve-search-type" style="padding:6px 10px;">'
+        + '<option value="">All types</option>'
+        + '<option value="alliance">Alliance</option>'
+        + '<option value="corporation">Corporation</option>'
+        + '<option value="pilot">Pilot</option>'
+        + '</select>'
+        + '<button type="button" id="eve-search-btn" style="padding:6px 16px;cursor:pointer;">Search</button>'
+        + '</div>'
+        + '<div id="eve-search-results" style="max-height:300px;overflow-y:auto;"></div>'
+        + '<div id="eve-batch-controls" style="display:none;margin-top:8px;">'
+        + '<button type="button" id="eve-batch-submit" style="padding:6px 16px;cursor:pointer;font-weight:bold;">Create Selected</button>'
+        + '<span id="eve-batch-status" style="margin-left:12px;"></span>'
+        + '</div>'
+        + '<p class="help">Search by name, ticker, or exact ID (6+ digits). Check results and click Create Selected to add multiple entries at once.</p>'
+        + '</div>';
+
+    fieldsets[0].parentNode.insertBefore(searchFieldset, fieldsets[1]);
+
+    const input = document.getElementById('eve-search-input');
+    const typeSelect = document.getElementById('eve-search-type');
+    const btn = document.getElementById('eve-search-btn');
+    const resultsDiv = document.getElementById('eve-search-results');
+    const batchControls = document.getElementById('eve-batch-controls');
+    const batchSubmit = document.getElementById('eve-batch-submit');
+    const batchStatus = document.getElementById('eve-batch-status');
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(text));
+        return div.innerHTML;
+    }
+
+    function updateSelectAll() {
+        const all = resultsDiv.querySelectorAll('.eve-row-cb');
+        const checked = resultsDiv.querySelectorAll('.eve-row-cb:checked');
+        const selectAll = document.getElementById('eve-select-all');
+        if (selectAll) {
+            selectAll.checked = all.length > 0 && all.length === checked.length;
+            selectAll.indeterminate = checked.length > 0 && checked.length < all.length;
+        }
+        batchControls.style.display = checked.length > 0 ? '' : 'none';
+    }
+
+    function doSearch() {
+        const q = input.value.trim();
+        if (q.length < 2) {
+            resultsDiv.innerHTML = '<p style="color:#999;">Enter at least 2 characters.</p>';
+            batchControls.style.display = 'none';
+            return;
+        }
+        const typeParam = typeSelect.value ? '&type=' + typeSelect.value : '';
+        fetch(searchUrl + '?q=' + encodeURIComponent(q) + typeParam)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.results || data.results.length === 0) {
+                    resultsDiv.innerHTML = '<p style="color:#999;">No matches found.</p>';
+                    batchControls.style.display = 'none';
+                    return;
+                }
+                const typeColors = {
+                    'alliance': '#2196f3',
+                    'corporation': '#ff9800',
+                    'pilot': '#9c27b0'
+                };
+                let html = '<table style="width:100%;border-collapse:collapse;">';
+                html += '<tr style="background:#f0f0f0;">'
+                      + '<th style="padding:4px 8px;"><input type="checkbox" id="eve-select-all" title="Select all"></th>'
+                      + '<th style="padding:4px 8px;text-align:left;">Name</th>'
+                      + '<th style="padding:4px 8px;text-align:left;">Type</th>'
+                      + '<th style="padding:4px 8px;text-align:left;">ID</th>'
+                      + '<th style="padding:4px 8px;"></th></tr>';
+                data.results.forEach(function(r) {
+                    const color = typeColors[r.entity_type] || '#999';
+                    html += '<tr style="border-bottom:1px solid #eee;">'
+                          + '<td style="padding:4px 8px;"><input type="checkbox" class="eve-row-cb"'
+                          + ' data-id="' + r.entity_id + '" data-type="' + r.entity_type + '"></td>'
+                          + '<td style="padding:4px 8px;">' + escapeHtml(r.label) + '</td>'
+                          + '<td style="padding:4px 8px;"><span style="background:' + color
+                          + ';color:#fff;padding:1px 6px;border-radius:999px;font-size:11px;">'
+                          + escapeHtml(r.entity_type) + '</span></td>'
+                          + '<td style="padding:4px 8px;">' + r.entity_id + '</td>'
+                          + '<td style="padding:4px 8px;"><a href="#" class="eve-select-btn" '
+                          + 'data-id="' + r.entity_id + '" data-type="' + r.entity_type
+                          + '" style="font-weight:bold;">Select</a></td>'
+                          + '</tr>';
+                });
+                html += '</table>';
+                resultsDiv.innerHTML = html;
+
+                // Select-all checkbox
+                document.getElementById('eve-select-all').addEventListener('change', function() {
+                    const checked = this.checked;
+                    resultsDiv.querySelectorAll('.eve-row-cb').forEach(function(cb) { cb.checked = checked; });
+                    updateSelectAll();
+                });
+
+                // Individual checkboxes
+                resultsDiv.querySelectorAll('.eve-row-cb').forEach(function(cb) {
+                    cb.addEventListener('change', updateSelectAll);
+                });
+
+                // Single-select links (still populate the form for single entry)
+                resultsDiv.querySelectorAll('.eve-select-btn').forEach(function(link) {
+                    link.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        const entityId = this.getAttribute('data-id');
+                        const entityType = this.getAttribute('data-type');
+                        const idField = document.getElementById('id_entity_id');
+                        const typeField = document.getElementById('id_entity_type');
+                        const noteField = document.getElementById('id_note');
+                        if (idField) idField.value = entityId;
+                        if (typeField) typeField.value = entityType;
+                        if (noteField) noteField.focus();
+                    });
+                });
+
+                updateSelectAll();
+            })
+            .catch(function(err) {
+                resultsDiv.innerHTML = '<p style="color:#f44336;">Search failed: ' + err + '</p>';
+                batchControls.style.display = 'none';
+            });
+    }
+
+    batchSubmit.addEventListener('click', function() {
+        const checked = resultsDiv.querySelectorAll('.eve-row-cb:checked');
+        if (checked.length === 0) return;
+
+        const entities = [];
+        checked.forEach(function(cb) {
+            entities.push({
+                entity_id: parseInt(cb.getAttribute('data-id'), 10),
+                entity_type: cb.getAttribute('data-type'),
+            });
+        });
+
+        const noteField = document.getElementById('id_note');
+        const denyField = document.getElementById('id_deny');
+        const note = noteField ? noteField.value.trim() : '';
+        const deny = denyField ? denyField.checked : false;
+
+        batchSubmit.disabled = true;
+        batchStatus.textContent = 'Creating...';
+        batchStatus.style.color = '#666';
+
+        fetch(batchUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+            body: JSON.stringify({ entities: entities, note: note, deny: deny }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            batchSubmit.disabled = false;
+            if (data.error) {
+                batchStatus.textContent = 'Error: ' + data.error;
+                batchStatus.style.color = '#f44336';
+                return;
+            }
+            let msg = data.created + ' created';
+            if (data.skipped > 0) {
+                msg += ', ' + data.skipped + ' already exist';
+            }
+            batchStatus.textContent = msg;
+            batchStatus.style.color = '#4caf50';
+
+            // Uncheck created rows, keep skipped checked
+            const skippedSet = new Set((data.skipped_ids || []).map(String));
+            checked.forEach(function(cb) {
+                if (!skippedSet.has(cb.getAttribute('data-id'))) {
+                    cb.checked = false;
+                    cb.closest('tr').style.opacity = '0.5';
+                }
+            });
+            updateSelectAll();
+        })
+        .catch(function(err) {
+            batchSubmit.disabled = false;
+            batchStatus.textContent = 'Failed: ' + err;
+            batchStatus.style.color = '#f44336';
+        });
+    });
+
+    btn.addEventListener('click', doSearch);
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+    });
+})();
+</script>
+{% endblock %}

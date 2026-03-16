@@ -21,4 +21,11 @@ urlpatterns = [
         views.sync_contract_registration,
         name='sync_contract_registration',
     ),
+    path('acl/', views.acl_list, name='acl_list'),
+    path('acl/search/', views.acl_search, name='acl_search'),
+    path('acl/batch-create/', views.acl_batch_create, name='acl_batch_create'),
+    path('acl/eligible/', views.acl_eligible, name='acl_eligible'),
+    path('acl/blocked/', views.acl_blocked, name='acl_blocked'),
+    path('acl/<int:rule_id>/toggle-deny/', views.acl_toggle_deny, name='acl_toggle_deny'),
+    path('acl/<int:rule_id>/delete/', views.acl_delete, name='acl_delete'),
 ]

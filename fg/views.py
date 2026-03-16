@@ -1,15 +1,20 @@
+import json
 import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpResponseForbidden
+from django.http import Http404, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 
 from .control import BgControlClient, MurmurSyncError
 from .host import get_host_adapter
-from .models import MumbleUser, MurmurModelLookupError, resolve_murmur_models
+from .models import (
+    AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT,
+    MumbleUser, MurmurModelLookupError, resolve_murmur_models,
+)
 from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers, safe_registration_inventory
 
 logger = logging.getLogger(__name__)
@@ -584,3 +589,262 @@ def sync_contract_registration(request, pkid: int, server_id: int):
         if mumble_user is None:
             raise Http404()
     return _sync_contract_for_registration(request, mumble_user)
+
+
+# ---------------------------------------------------------------------------
+# Mumble ACL (user-facing access control list)
+# ---------------------------------------------------------------------------
+
+def _can_view_acl(user):
+    return user.is_authenticated and (
+        user.is_staff
+        or user.has_perm('mumble_fg.view_accessrule')
+        or get_host_adapter().user_is_alliance_leader(user)
+    )
+
+
+def _can_edit_acl(user):
+    return user.is_authenticated and (
+        user.is_staff
+        or user.has_perm('mumble_fg.change_accessrule')
+        or get_host_adapter().user_is_alliance_leader(user)
+    )
+
+
+def _resolve_name_for_rule(rule):
+    """Resolve an entity name for display. Returns the name or '-'."""
+    from .admin import _get_eve_character_model, _get_db_for_eve
+    EveCharacter = _get_eve_character_model()
+    if EveCharacter is None:
+        return '-'
+    db = _get_db_for_eve() or 'default'
+    if rule.entity_type == ENTITY_TYPE_ALLIANCE:
+        row = EveCharacter.objects.using(db).filter(alliance_id=rule.entity_id).values('alliance_name').first()
+        return (row or {}).get('alliance_name', '-')
+    elif rule.entity_type == ENTITY_TYPE_CORPORATION:
+        row = EveCharacter.objects.using(db).filter(corporation_id=rule.entity_id).values('corporation_name').first()
+        return (row or {}).get('corporation_name', '-')
+    elif rule.entity_type == ENTITY_TYPE_PILOT:
+        row = EveCharacter.objects.using(db).filter(character_id=rule.entity_id).values('character_name').first()
+        return (row or {}).get('character_name', '-')
+    return '-'
+
+
+@login_required
+def acl_list(request):
+    if not _can_view_acl(request.user):
+        return HttpResponseForbidden()
+
+    rules = list(AccessRule.objects.all())
+    for rule in rules:
+        rule.resolved_name = _resolve_name_for_rule(rule)
+
+    can_edit = _can_edit_acl(request.user)
+    return render(request, 'fg/acl.html', {
+        'rules': rules,
+        'can_edit': can_edit,
+        'search_url': reverse('mumble:acl_search'),
+        'batch_url': reverse('mumble:acl_batch_create'),
+        'eligible_url': reverse('mumble:acl_eligible'),
+        'blocked_url': reverse('mumble:acl_blocked'),
+    })
+
+
+@login_required
+def acl_search(request):
+    if not _can_view_acl(request.user):
+        return JsonResponse({'error': 'Forbidden'}, status=403)
+
+    from .admin import _search_eve_entities
+    query = request.GET.get('q', '').strip()
+    entity_type = request.GET.get('type', '').strip() or None
+    if entity_type and entity_type not in (ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT):
+        entity_type = None
+    results = _search_eve_entities(query, entity_type=entity_type)
+    return JsonResponse({'results': results})
+
+
+@require_POST
+@login_required
+def acl_batch_create(request):
+    if not _can_edit_acl(request.user):
+        return JsonResponse({'error': 'Forbidden'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    entities = data.get('entities', [])
+    note = (data.get('note') or '').strip()
+    deny = bool(data.get('deny', False))
+    created_by = request.user.get_username()
+
+    if not entities:
+        return JsonResponse({'error': 'No entities provided'}, status=400)
+
+    created = []
+    skipped = []
+    for entry in entities:
+        entity_id = entry.get('entity_id')
+        entity_type = entry.get('entity_type')
+        if not entity_id or entity_type not in (ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT):
+            continue
+        _, was_created = AccessRule.objects.get_or_create(
+            entity_id=entity_id,
+            defaults={
+                'entity_type': entity_type,
+                'deny': deny,
+                'note': note,
+                'created_by': created_by,
+            },
+        )
+        if was_created:
+            created.append(entity_id)
+        else:
+            skipped.append(entity_id)
+
+    return JsonResponse({
+        'created': len(created),
+        'skipped': len(skipped),
+        'skipped_ids': skipped,
+    })
+
+
+def _no_cache_json(data, **kwargs):
+    """Return a JsonResponse with no-cache headers."""
+    response = JsonResponse(data, **kwargs)
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    return response
+
+
+def _acl_rule_sets():
+    """Parse ACL rules into categorised ID sets."""
+    rules = list(AccessRule.objects.all())
+    return {
+        'allowed_alliances': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_ALLIANCE and not r.deny},
+        'denied_alliances': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_ALLIANCE and r.deny},
+        'denied_corps': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_CORPORATION and r.deny},
+        'allowed_pilots': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_PILOT and not r.deny},
+        'denied_pilots': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_PILOT and r.deny},
+    }
+
+
+def _eve_char_setup():
+    from .admin import _get_eve_character_model, _get_db_for_eve
+    return _get_eve_character_model(), _get_db_for_eve()
+
+
+def _char_list(queryset):
+    return [
+        {
+            'character_name': c['character_name'],
+            'corporation': c['corporation_name'] or '-',
+            'alliance': c['alliance_name'] or '-',
+        }
+        for c in queryset.values(
+            'character_id', 'character_name', 'corporation_name', 'alliance_name',
+        ).order_by('character_name')
+    ]
+
+
+@login_required
+def acl_eligible(request):
+    if not _can_view_acl(request.user):
+        return _no_cache_json({'error': 'Forbidden'}, status=403)
+
+    from django.db.models import Q
+
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None:
+        return _no_cache_json({'error': 'EVE data unavailable'}, status=503)
+
+    rs = _acl_rule_sets()
+
+    q = Q()
+    # Base: in an allowed alliance, not in a denied corp, not individually denied
+    if rs['allowed_alliances']:
+        base = Q(alliance_id__in=rs['allowed_alliances'])
+        if rs['denied_corps']:
+            base &= ~Q(corporation_id__in=rs['denied_corps'])
+        if rs['denied_pilots']:
+            base &= ~Q(character_id__in=rs['denied_pilots'])
+        q |= base
+
+    # Pilot-level allows override everything
+    if rs['allowed_pilots']:
+        q |= Q(character_id__in=rs['allowed_pilots'])
+
+    if not q:
+        return _no_cache_json({'pilots': [], 'count': 0})
+
+    pilots = _char_list(
+        EveCharacter.objects.using(db).filter(q, pending_delete=False)
+    )
+    return _no_cache_json({'pilots': pilots, 'count': len(pilots)})
+
+
+@login_required
+def acl_blocked(request):
+    """Return pilots explicitly blocked by deny rules."""
+    if not _can_view_acl(request.user):
+        return _no_cache_json({'error': 'Forbidden'}, status=403)
+
+    from django.db.models import Q
+
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None:
+        return _no_cache_json({'error': 'EVE data unavailable'}, status=503)
+
+    rs = _acl_rule_sets()
+
+    q = Q()
+    # Pilots in denied alliances (unless individually allowed)
+    if rs['denied_alliances']:
+        base = Q(alliance_id__in=rs['denied_alliances'])
+        if rs['allowed_pilots']:
+            base &= ~Q(character_id__in=rs['allowed_pilots'])
+        q |= base
+
+    # Pilots in denied corps (unless individually allowed)
+    if rs['denied_corps']:
+        base = Q(corporation_id__in=rs['denied_corps'])
+        if rs['allowed_pilots']:
+            base &= ~Q(character_id__in=rs['allowed_pilots'])
+        q |= base
+
+    # Individually denied pilots
+    if rs['denied_pilots']:
+        q |= Q(character_id__in=rs['denied_pilots'])
+
+    if not q:
+        return _no_cache_json({'pilots': [], 'count': 0})
+
+    pilots = _char_list(
+        EveCharacter.objects.using(db).filter(q, pending_delete=False)
+    )
+    return _no_cache_json({'pilots': pilots, 'count': len(pilots)})
+
+
+@require_POST
+@login_required
+def acl_toggle_deny(request, rule_id):
+    if not _can_edit_acl(request.user):
+        return HttpResponseForbidden()
+
+    rule = get_object_or_404(AccessRule, pk=rule_id)
+    rule.deny = not rule.deny
+    rule.save(update_fields=['deny', 'updated_at'])
+    return redirect('mumble:acl_list')
+
+
+@require_POST
+@login_required
+def acl_delete(request, rule_id):
+    if not _can_edit_acl(request.user):
+        return HttpResponseForbidden()
+
+    rule = get_object_or_404(AccessRule, pk=rule_id)
+    rule.delete()
+    messages.success(request, _('ACL entry deleted.'))
+    return redirect('mumble:acl_list')
