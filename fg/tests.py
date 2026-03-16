@@ -11,12 +11,6 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import EveCharacter, Group, GroupMembership, UserProfile
-from fg.passwords import (
-    LEGACY_BCRYPT_SHA256,
-    MURMUR_PBKDF2_SHA384,
-    build_murmur_password_record,
-    verify_murmur_password,
-)
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
@@ -25,8 +19,6 @@ from fg.control import BgControlClient, MurmurSyncError, _post_json
 from fg.models import MumbleServer, MumbleSession, MumbleUser
 from fg.runtime import RuntimeRegistration, RuntimeServer
 from fg.views import (
-    _PASSWORD_ALPHABET,
-    _generate_password,
     _get_mumble_username,
     _compute_display_name,
     _compute_groups,
@@ -98,50 +90,6 @@ def _grant_alliance_leader_group(user):
     settings = CorporationSettings.load()
     settings.alliance_leader_groups.add(group)
     return group
-
-
-class GeneratePasswordTest(TestCase):
-    def test_default_length(self):
-        pw = _generate_password()
-        self.assertEqual(len(pw), 16)
-
-    def test_custom_length(self):
-        pw = _generate_password(length=32)
-        self.assertEqual(len(pw), 32)
-
-    def test_supported_ascii_charset_only(self):
-        pw = _generate_password(length=200)
-        self.assertTrue(all(ch in _PASSWORD_ALPHABET for ch in pw))
-
-    def test_unique(self):
-        passwords = {_generate_password() for _ in range(50)}
-        self.assertEqual(len(passwords), 50)
-
-
-class MurmurPasswordHashTest(TestCase):
-    def test_round_trip(self):
-        record = build_murmur_password_record('fleetpass123')
-        self.assertEqual(record['hashfn'], MURMUR_PBKDF2_SHA384)
-        self.assertTrue(record['pw_salt'])
-        self.assertTrue(record['kdf_iterations'] >= 1000)
-        self.assertTrue(
-            verify_murmur_password(
-                'fleetpass123',
-                pwhash=record['pwhash'],
-                hashfn=record['hashfn'],
-                pw_salt=record['pw_salt'],
-                kdf_iterations=record['kdf_iterations'],
-            )
-        )
-        self.assertFalse(
-            verify_murmur_password(
-                'wrongpass',
-                pwhash=record['pwhash'],
-                hashfn=record['hashfn'],
-                pw_salt=record['pw_salt'],
-                kdf_iterations=record['kdf_iterations'],
-            )
-        )
 
 
 class GetMumbleUsernameTest(TestCase):
@@ -270,16 +218,16 @@ class MumbleModelTest(TestCase):
     def test_str(self):
         user = User.objects.create_user('testuser', password='pass')
         mu = MumbleUser.objects.create(
-            user=user, server=self.server, username='Test_Pilot', pwhash='fakehash'
+            user=user, server=self.server, username='Test_Pilot', pwhash=''
         )
         self.assertEqual(str(mu), 'Test_Pilot')
 
     def test_defaults(self):
         user = User.objects.create_user('testuser', password='pass')
         mu = MumbleUser.objects.create(
-            user=user, server=self.server, username='Test_Pilot', pwhash='fakehash'
+            user=user, server=self.server, username='Test_Pilot', pwhash=''
         )
-        self.assertEqual(mu.hashfn, MURMUR_PBKDF2_SHA384)
+        self.assertEqual(mu.hashfn, 'murmur-pbkdf2-sha384')
         self.assertEqual(mu.pw_salt, '')
         self.assertIsNone(mu.kdf_iterations)
         self.assertIsNone(mu.mumble_userid)
@@ -601,8 +549,7 @@ class ResetPasswordViewTest(TestCase):
             user=self.user,
             server=self.server,
             username='Test_Pilot',
-            pwhash='oldhash',
-            hashfn=LEGACY_BCRYPT_SHA256,
+            pwhash='',
         )
 
     def test_reset_updates_userid(self):
@@ -635,8 +582,7 @@ class SetPasswordViewTest(TestCase):
             user=self.user,
             server=self.server,
             username='Test_Pilot',
-            pwhash='oldhash',
-            hashfn=LEGACY_BCRYPT_SHA256,
+            pwhash='',
         )
 
     def test_set_valid_password(self):

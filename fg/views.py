@@ -1,5 +1,4 @@
 import logging
-import secrets
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -17,17 +16,11 @@ from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers
 logger = logging.getLogger(__name__)
 _CONTROL_CLIENT = BgControlClient()
 
-_FORBIDDEN_PASSWORD_CHARS = {"'", '"', '`', '\\'}
-_PASSWORD_ALPHABET = ''.join(
-    chr(code) for code in range(33, 127) if chr(code) not in _FORBIDDEN_PASSWORD_CHARS
-)
-
-
-def _generate_password(length=16):
-    return ''.join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+_FORBIDDEN_PASSWORD_CHARS = frozenset({"'", '"', '`', '\\'})
 
 
 def _password_has_supported_chars(password):
+    """Validate user-provided password before sending to BG for hashing."""
     for ch in password:
         if ord(ch) < 33 or ord(ch) > 126:
             return False
@@ -250,7 +243,6 @@ def activate(request, server_id):
         messages.info(request, _('Murmur account already exists on this server.'))
         return redirect('profile')
 
-    password = _generate_password()
     mumble_user = _build_registration_target(request.user, server)
     if _host_murmur_models_available():
         persisted_user = MumbleUser(
@@ -264,7 +256,7 @@ def activate(request, server_id):
         persisted_user.save()
         mumble_user = persisted_user
     try:
-        murmur_userid = _sync_remote_registration(mumble_user, password=password)
+        murmur_userid = _sync_remote_registration(mumble_user)
     except MurmurSyncError as exc:
         logger.warning(
             'Failed to provision Murmur registration for MumbleUser pk=%s on server=%s: %s',
@@ -276,12 +268,19 @@ def activate(request, server_id):
             request,
             _('Murmur registration sync failed. Requesting a new password later will retry it.'),
         )
-    else:
-        if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
-            mumble_user.mumble_userid = murmur_userid
-            mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Murmur account created.'))
-    request.session[f'murmur_temp_password_{server_id}'] = password
+        return redirect('profile')
+
+    if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
+        mumble_user.mumble_userid = murmur_userid
+        mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
+
+    # Request initial password from BG (BG generates it).
+    try:
+        password, _ = _sync_password(mumble_user)
+        request.session[f'murmur_temp_password_{server_id}'] = password
+    except MurmurSyncError:
+        logger.warning('Initial password request failed for new registration on server=%s', server.pk)
+    messages.success(request, _('Murmur account created.'))
     return redirect('profile')
 
 
@@ -293,7 +292,6 @@ def reset_password(request, server_id):
         messages.error(request, _('No Murmur account found.'))
         return redirect('profile')
 
-    password = _generate_password()
     try:
         password, murmur_userid = _sync_password(mumble_user)
     except MurmurSyncError as exc:
@@ -307,11 +305,12 @@ def reset_password(request, server_id):
             request,
             _('Murmur password reset request could not complete now. Retrying later will request a new password again.'),
         )
-    else:
-        if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
-            mumble_user.mumble_userid = murmur_userid
-            mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
-        messages.success(request, _('Murmur password has been reset.'))
+        return redirect('profile')
+
+    if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
+        mumble_user.mumble_userid = murmur_userid
+        mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
+    messages.success(request, _('Murmur password has been reset.'))
     request.session[f'murmur_temp_password_{server_id}'] = password
     return redirect('profile')
 
