@@ -19,8 +19,11 @@ def get_profile_panels(request):
 
 
 def get_periodic_tasks():
-    from fg.tasks import periodic_acl_sync
+    from celery.schedules import crontab
 
     return {
-        'mumble_fg.periodic_acl_sync': periodic_acl_sync,
+        'mumble_fg.periodic_acl_sync': {
+            'task': 'fg.tasks.periodic_acl_sync',
+            'schedule': crontab(minute='*/10'),
+        },
     }

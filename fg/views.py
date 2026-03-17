@@ -3,6 +3,7 @@ import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import get_user_model
 from django.http import Http404, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -164,10 +165,6 @@ def _build_registration_target(user, server, *, existing=None):
     if not target.groups:
         target.groups = _compute_groups(user, mumble_user=target)
     return target
-
-
-def _has_alliance_leader_membership(user):
-    return get_host_adapter().has_alliance_leader_membership(user)
 
 
 def _get_mumble_username(user):
@@ -359,6 +356,60 @@ def set_password(request, server_id):
     return redirect('profile')
 
 
+def _profile_password_action_response(request):
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return JsonResponse(
+            {'error': _('BG unavailable'), 'bg_unavailable': True},
+            status=503,
+        )
+    messages.warning(request, _('BG unavailable'))
+    return redirect('profile')
+
+
+def _validate_profile_password_choice(request):
+    choices = profile_password_pilot_choices(request.user)
+    if not choices:
+        return None
+
+    valid_ids = {str(choice['character_id']) for choice in choices}
+    pilot_id = str(request.POST.get('pilot_id', '') or '').strip()
+    if pilot_id and pilot_id not in valid_ids:
+        return False
+    return True
+
+
+@require_POST
+@login_required
+def profile_reset_password(request):
+    selection = _validate_profile_password_choice(request)
+    if selection is None:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'error': _('Forbidden')}, status=403)
+        return HttpResponseForbidden()
+    if selection is False:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'error': _('Invalid pilot selection.')}, status=400)
+        messages.error(request, _('Invalid pilot selection.'))
+        return redirect('profile')
+    return _profile_password_action_response(request)
+
+
+@require_POST
+@login_required
+def profile_set_password(request):
+    selection = _validate_profile_password_choice(request)
+    if selection is None:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'error': _('Forbidden')}, status=403)
+        return HttpResponseForbidden()
+    if selection is False:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'error': _('Invalid pilot selection.')}, status=400)
+        messages.error(request, _('Invalid pilot selection.'))
+        return redirect('profile')
+    return _profile_password_action_response(request)
+
+
 @require_POST
 @login_required
 def deactivate(request, server_id):
@@ -393,24 +444,17 @@ def deactivate(request, server_id):
 
 
 def _can_manage_mumble(user):
-    # Legacy access path retained for now. This should eventually be replaced
-    # by explicit Murmur permission checks so presence/admin access flows
-    # through one permission model instead of overlapping staff/group gates.
+    if not user.is_authenticated:
+        return False
     return (
-        user.is_staff
-        or get_host_adapter().user_is_alliance_leader(user)
+        user.is_superuser
         or user.has_perm('mumble.manage_mumble_admin')
+        or user.has_perm('mumble_fg.manage_mumble_admin')
     )
 
 
 def _can_manage_mumble_admin(user):
-    if not user.is_authenticated:
-        return False
-    if user.is_superuser:
-        return True
-    if user.is_staff and _has_alliance_leader_membership(user):
-        return True
-    return user.has_perm('mumble.manage_mumble_admin')
+    return _can_manage_mumble(user)
 
 
 @login_required
@@ -601,7 +645,7 @@ def sync_contract_registration(request, pkid: int, server_id: int):
 # ---------------------------------------------------------------------------
 
 def _acl_admin_bypass(user):
-    return user.is_staff or get_host_adapter().user_is_alliance_leader(user)
+    return user.is_superuser
 
 
 def _has_acl_perm(user, codename):
@@ -957,6 +1001,21 @@ def _main_character_rows(EveCharacter, db, user_ids):
     return mains
 
 
+def _resolved_eve_user_id(user, *, db: str):
+    if not getattr(user, 'is_authenticated', False):
+        return None
+    if db == 'default':
+        return user.id
+    user_model = get_user_model()
+    mapped = (
+        user_model.objects.using(db)
+        .filter(username=getattr(user, 'username', ''))
+        .values_list('id', flat=True)
+        .first()
+    )
+    return mapped or user.id
+
+
 def _account_rule_decisions(EveCharacter, db, rs):
     account_rules = {}
     for row in _matching_character_rows(EveCharacter, db, rs):
@@ -1055,6 +1114,68 @@ def _eligible_account_list(EveCharacter, db, rs):
 
     pilots.sort(key=lambda pilot: pilot['character_name'].lower())
     return pilots
+
+
+def profile_password_pilot_choices(user):
+    if not getattr(user, 'is_authenticated', False):
+        return []
+
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None:
+        return []
+    eve_user_id = _resolved_eve_user_id(user, db=db)
+    if eve_user_id is None:
+        return []
+
+    rs = _acl_rule_sets()
+    if eve_user_id in _blocked_user_reasons(_account_rule_decisions(EveCharacter, db, rs)):
+        return []
+
+    allowed_rows = []
+    for row in _matching_character_rows(EveCharacter, db, rs):
+        if row['user_id'] != eve_user_id:
+            continue
+        match = _explicit_rule_match(rs, row) or {}
+        if match.get('action') != 'allow':
+            continue
+        allowed_rows.append((row, match))
+
+    if not allowed_rows:
+        return []
+
+    main = _main_character_rows(EveCharacter, db, [eve_user_id]).get(eve_user_id)
+    if not main:
+        return []
+
+    pilot_choices = [
+        {
+            'character_id': main['character_id'],
+            'character_name': main['character_name'],
+            'is_main': True,
+        }
+    ]
+    seen_ids = {main['character_id']}
+    alt_rows = sorted(
+        (
+            row
+            for row, match in allowed_rows
+            if match['reason_type'] == ENTITY_TYPE_PILOT
+            and row['character_id'] != main['character_id']
+        ),
+        key=lambda row: row['character_name'].lower(),
+    )
+    for row in alt_rows:
+        if row['character_id'] in seen_ids:
+            continue
+        seen_ids.add(row['character_id'])
+        pilot_choices.append(
+            {
+                'character_id': row['character_id'],
+                'character_name': row['character_name'],
+                'is_main': False,
+            }
+        )
+    return pilot_choices
 
 
 @login_required

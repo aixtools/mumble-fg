@@ -7,6 +7,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+from django.urls import reverse
+
 from fg.models import MumbleUser, MurmurModelLookupError
 from fg.runtime import safe_list_servers, safe_pilot_registrations
 
@@ -24,6 +26,10 @@ class MurmurPanelDescriptor:
     username_with_slot: str | None
     server_label: str
     server_hint: str
+    eligible_pilots: tuple[dict[str, Any], ...]
+    show_pilot_selector: bool
+    password_reset_url: str
+    password_set_url: str
 
     def to_panel_context(self) -> dict[str, Any]:
         return {
@@ -36,6 +42,10 @@ class MurmurPanelDescriptor:
             'username_with_slot': self.username_with_slot,
             'server_label': self.server_label,
             'server_hint': self.server_hint,
+            'eligible_pilots': list(self.eligible_pilots),
+            'show_pilot_selector': self.show_pilot_selector,
+            'password_reset_url': self.password_reset_url,
+            'password_set_url': self.password_set_url,
         }
 
 
@@ -55,6 +65,12 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     """Default profile panel provider usable by any host."""
 
     provider_name = 'generic'
+
+    @staticmethod
+    def _eligible_pilots(user) -> list[dict[str, Any]]:
+        from fg.views import profile_password_pilot_choices
+
+        return profile_password_pilot_choices(user)
 
     def _active_servers(self):
         return safe_list_servers()
@@ -97,10 +113,53 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             return explicit_name
         return str(getattr(server, 'address', '') or '').strip()
 
+    def _panel_descriptor(
+        self,
+        *,
+        request,
+        server,
+        account,
+        slot_suffix,
+        eligible_pilots: list[dict[str, Any]],
+    ) -> MurmurPanelDescriptor:
+        username_with_slot = None
+        if account is not None:
+            username = str(getattr(account, 'username', '') or '').strip()
+            if username:
+                username_with_slot = f'{username}{slot_suffix or ""}'
+
+        return MurmurPanelDescriptor(
+            key=f'murmur-server-{getattr(server, "pk", "profile")}',
+            priority=self.panel_priority,
+            template=self.panel_template,
+            server=server,
+            account=account,
+            temp_password=request.session.pop(f'murmur_temp_password_{server.pk}', None) if server is not None else None,
+            username_with_slot=username_with_slot,
+            server_label=self._server_label(server) if server is not None else 'Mumble Authentication',
+            server_hint=self._server_hint(server) if server is not None else 'Profile password panel',
+            eligible_pilots=tuple(eligible_pilots),
+            show_pilot_selector=len(eligible_pilots) > 1,
+            password_reset_url=reverse('mumble:profile_reset_password'),
+            password_set_url=reverse('mumble:profile_set_password'),
+        )
+
     def build_panels(self, request) -> list[dict[str, Any]]:
+        eligible_pilots = self._eligible_pilots(request.user)
+        if not eligible_pilots:
+            return []
+
         servers = self._active_servers()
         if not servers:
-            return []
+            return [
+                self._panel_descriptor(
+                    request=request,
+                    server=None,
+                    account=None,
+                    slot_suffix=None,
+                    eligible_pilots=eligible_pilots,
+                ).to_panel_context()
+            ]
 
         accounts_by_server = self._accounts_by_server(request.user.id)
         slot_labels = self._slot_labels(accounts_by_server)
@@ -108,23 +167,13 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         descriptors: list[MurmurPanelDescriptor] = []
         for server in servers:
             account = accounts_by_server.get(server.pk)
-            slot_suffix = slot_labels.get(server.pk)
-            username_with_slot = None
-            if account is not None:
-                username = str(getattr(account, 'username', '') or '').strip()
-                if username:
-                    username_with_slot = f'{username}{slot_suffix or ""}'
             descriptors.append(
-                MurmurPanelDescriptor(
-                    key=f'murmur-server-{server.pk}',
-                    priority=self.panel_priority,
-                    template=self.panel_template,
+                self._panel_descriptor(
+                    request=request,
                     server=server,
                     account=account,
-                    temp_password=request.session.pop(f'murmur_temp_password_{server.pk}', None),
-                    username_with_slot=username_with_slot,
-                    server_label=self._server_label(server),
-                    server_hint=self._server_hint(server),
+                    slot_suffix=slot_labels.get(server.pk),
+                    eligible_pilots=eligible_pilots,
                 )
             )
 

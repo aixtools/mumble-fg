@@ -278,6 +278,27 @@ class AccessRuleAdmin(admin.ModelAdmin):
         css = {'all': ()}
         js = ()
 
+    def _has_accessrule_perm(self, request, codename):
+        return request.user.is_active and (
+            request.user.is_superuser
+            or request.user.has_perm(f'mumble_fg.{codename}')
+        )
+
+    def has_module_permission(self, request):
+        return self._has_accessrule_perm(request, 'view_accessrule')
+
+    def has_view_permission(self, request, obj=None):
+        return self._has_accessrule_perm(request, 'view_accessrule')
+
+    def has_add_permission(self, request):
+        return self._has_accessrule_perm(request, 'add_accessrule')
+
+    def has_change_permission(self, request, obj=None):
+        return self._has_accessrule_perm(request, 'change_accessrule')
+
+    def has_delete_permission(self, request, obj=None):
+        return self._has_accessrule_perm(request, 'delete_accessrule')
+
     def get_urls(self):
         custom_urls = [
             path(
@@ -294,6 +315,8 @@ class AccessRuleAdmin(admin.ModelAdmin):
         return custom_urls + super().get_urls()
 
     def eve_entity_search_view(self, request):
+        if not self.has_add_permission(request):
+            return JsonResponse({'error': 'Forbidden'}, status=403)
         query = request.GET.get('q', '').strip()
         entity_type = request.GET.get('type', '').strip() or None
         if entity_type and entity_type not in (ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT):
@@ -302,6 +325,8 @@ class AccessRuleAdmin(admin.ModelAdmin):
         return JsonResponse({'results': results})
 
     def batch_create_view(self, request):
+        if not self.has_add_permission(request):
+            return JsonResponse({'error': 'Forbidden'}, status=403)
         if request.method != 'POST':
             return JsonResponse({'error': 'POST required'}, status=405)
         try:
@@ -597,6 +622,18 @@ class AccessRuleAuditAdmin(admin.ModelAdmin):
         'previous',
         'metadata',
     )
+
+    def _has_audit_view_perm(self, request):
+        return request.user.is_active and (
+            request.user.is_superuser
+            or request.user.has_perm('mumble_fg.view_accessruleaudit')
+        )
+
+    def has_module_permission(self, request):
+        return self._has_audit_view_perm(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._has_audit_view_perm(request)
 
     def has_add_permission(self, request):
         return False
