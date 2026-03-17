@@ -319,7 +319,11 @@ class BgControlClient:
             'username': mumble_user.username,
         }
         if password is not None:
-            payload['password'] = password
+            from fg.crypto import is_available as crypto_available, encrypt_password
+            if crypto_available():
+                payload['encrypted_password'] = encrypt_password(password)
+            else:
+                payload['password'] = password
         response = _post_json('/v1/password-reset', payload, requested_by=requested_by)
         resolved_password = _extract_password(response)
         if resolved_password is None:
