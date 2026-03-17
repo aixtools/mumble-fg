@@ -16,12 +16,13 @@ from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cu
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
-from fg.models import MumbleUser
+from fg.models import AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_PILOT, MumbleUser
 from fg.runtime import RuntimeRegistration, RuntimeServer
 from fg.views import (
     _get_mumble_username,
     _compute_display_name,
     _compute_groups,
+    profile_password_pilot_choices,
 )
 
 # Override cache and session backends so tests don't require Redis
@@ -92,6 +93,32 @@ def _grant_alliance_leader_group(user):
     settings = CorporationSettings.load()
     settings.alliance_leader_groups.add(group)
     return group
+
+
+def _grant_profile_panel_access(
+    user,
+    *,
+    character_id,
+    character_name,
+    corporation_id,
+    corporation_name,
+    alliance_id,
+    alliance_name,
+):
+    _make_char(
+        user,
+        character_id=character_id,
+        character_name=character_name,
+        corporation_id=corporation_id,
+        corporation_name=corporation_name,
+        alliance_id=alliance_id,
+        alliance_name=alliance_name,
+    )
+    AccessRule.objects.create(
+        entity_id=alliance_id,
+        entity_type=ENTITY_TYPE_ALLIANCE,
+        deny=False,
+    )
 
 
 class GetMumbleUsernameTest(TestCase):
@@ -1075,6 +1102,15 @@ class ProfilePanelProviderTest(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
         self.user = _make_member('paneluser')
+        _grant_profile_panel_access(
+            self.user,
+            character_id=301001,
+            character_name='Panel Main',
+            corporation_id=401001,
+            corporation_name='Panel Corp',
+            alliance_id=501001,
+            alliance_name='Panel Alliance',
+        )
         self.server1 = _make_server(name='Server 1', address='s1.example.com:64738')
         self.server2 = _make_server(name='Server 2', address='s2.example.com:64738')
 
@@ -1116,6 +1152,48 @@ class ProfilePanelProviderTest(TestCase):
         self.assertEqual(first['temp_password'], 'abc123')
         self.assertIsNone(second['temp_password'])
 
+    def test_panel_hidden_when_user_is_not_acl_eligible(self):
+        request = self.factory.get('/profile/')
+        request.user = _make_member('ineligiblepaneluser')
+        request.session = {}
+
+        panels = build_profile_panels(request)
+
+        self.assertEqual(panels, [])
+
+    def test_panel_includes_main_and_explicit_alt_selector_choices(self):
+        _make_char(
+            self.user,
+            character_id=301002,
+            character_name='Allowed Alt',
+            is_main=False,
+            corporation_id=401002,
+            corporation_name='Alt Corp',
+            alliance_id=501002,
+            alliance_name='Alt Alliance',
+        )
+        AccessRule.objects.create(
+            entity_id=301002,
+            entity_type=ENTITY_TYPE_PILOT,
+            deny=False,
+        )
+
+        panels = build_profile_panels(self._request())
+
+        self.assertEqual(
+            [pilot['character_name'] for pilot in panels[0]['eligible_pilots']],
+            ['Panel Main', 'Allowed Alt'],
+        )
+        self.assertTrue(panels[0]['show_pilot_selector'])
+
+    @patch('fg.panels.providers.safe_list_servers', return_value=[])
+    def test_panel_still_renders_without_bg_server_inventory(self, _mock_safe_list_servers):
+        panels = build_profile_panels(self._request())
+
+        self.assertEqual(len(panels), 1)
+        self.assertIsNone(panels[0]['server'])
+        self.assertEqual(panels[0]['server_label'], 'Mumble Authentication')
+
     @override_settings(MURMUR_PANEL_HOST='cube')
     def test_host_provider_resolution(self):
         provider = get_profile_panel_provider()
@@ -1133,6 +1211,15 @@ class RuntimeFallbackProfilePanelProviderTest(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
         self.user = _make_member('runtimepaneluser')
+        _grant_profile_panel_access(
+            self.user,
+            character_id=302001,
+            character_name='Runtime Main',
+            corporation_id=402001,
+            corporation_name='Runtime Corp',
+            alliance_id=502001,
+            alliance_name='Runtime Alliance',
+        )
 
     def _request(self):
         request = self.factory.get('/profile/')
@@ -1173,6 +1260,15 @@ class CubeExtensionTest(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
         self.user = _make_member('cubeextuser')
+        _grant_profile_panel_access(
+            self.user,
+            character_id=303001,
+            character_name='Cube Main',
+            corporation_id=403001,
+            corporation_name='Cube Corp',
+            alliance_id=503001,
+            alliance_name='Cube Alliance',
+        )
         self.server = _make_server(name='Cube Server', address='cube.example.com:64738')
 
     def _request(self):
@@ -1201,6 +1297,65 @@ class CubeExtensionMissingModelsTest(TestCase):
         patterns = get_i18n_urlpatterns()
 
         self.assertEqual(len(patterns), 1)
+
+
+@override_settings(**_NO_REDIS)
+class ProfilePasswordPanelActionTest(TestCase):
+    def setUp(self):
+        self.user = _make_member('profilepanelpassworduser')
+        self.client.force_login(self.user)
+        self.main = _make_char(
+            self.user,
+            character_id=304001,
+            character_name='Profile Main',
+            corporation_id=404001,
+            corporation_name='Profile Corp',
+            alliance_id=504001,
+            alliance_name='Profile Alliance',
+        )
+        AccessRule.objects.create(
+            entity_id=504001,
+            entity_type=ENTITY_TYPE_ALLIANCE,
+            deny=False,
+        )
+
+    def test_profile_password_choices_return_main_for_alliance_allow(self):
+        self.assertEqual(
+            profile_password_pilot_choices(self.user),
+            [
+                {
+                    'character_id': self.main.character_id,
+                    'character_name': self.main.character_name,
+                    'is_main': True,
+                }
+            ],
+        )
+
+    def test_profile_reset_password_returns_bg_unavailable_for_ajax(self):
+        response = self.client.post(
+            reverse('mumble:profile_reset_password'),
+            {'pilot_id': self.main.character_id},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertJSONEqual(
+            response.content,
+            {'error': 'BG unavailable', 'bg_unavailable': True},
+        )
+
+    def test_profile_set_password_returns_bg_unavailable_for_ajax(self):
+        response = self.client.post(
+            reverse('mumble:profile_set_password'),
+            {'pilot_id': self.main.character_id, 'murmur_password': 'longenoughpw'},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertJSONEqual(
+            response.content,
+            {'error': 'BG unavailable', 'bg_unavailable': True},
+        )
 
 
 # ── Profile integration ────────────────────────────────────────────

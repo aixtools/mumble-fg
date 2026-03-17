@@ -1,25 +1,18 @@
 from django.utils.translation import gettext_lazy as _
 
-from .host import get_host_adapter
-
-
 def _can_view_acl(request):
     if not request.user.is_authenticated:
         return False
-    return (
-        request.user.is_staff
-        or get_host_adapter().user_is_alliance_leader(request.user)
-        or request.user.has_perm('mumble_fg.view_accessrule')
-    )
+    return request.user.is_superuser or request.user.has_perm('mumble_fg.view_accessrule')
 
 
 def _can_manage_mumble(request):
     if not request.user.is_authenticated:
         return False
     return (
-        request.user.is_staff
-        or get_host_adapter().user_is_alliance_leader(request.user)
+        request.user.is_superuser
         or request.user.has_perm('mumble.manage_mumble_admin')
+        or request.user.has_perm('mumble_fg.manage_mumble_admin')
     )
 
 

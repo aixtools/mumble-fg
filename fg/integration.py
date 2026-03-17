@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from fg.panels import ProfilePanelService
-
 
 class MurmurHostIntegration:
     """Host integration facade exposed to external Django projects."""
@@ -12,6 +10,8 @@ class MurmurHostIntegration:
 
     def __init__(self, *, host: str | None = None):
         resolved_host = host or self.host
+        from fg.panels.service import ProfilePanelService
+
         self._panel_service = ProfilePanelService(host=resolved_host)
 
     def get_profile_panels(self, request):

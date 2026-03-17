@@ -1,6 +1,6 @@
 {% load i18n %}
 
-<div class="settings-card full-width">
+<div class="settings-card full-width mumble-profile-panel" data-panel-id="{{ panel.key }}">
     <div class="card-header" style="background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%); border-bottom: 2px solid var(--primary-color);">
         <h2 class="card-title" style="color: var(--primary-color); text-transform: uppercase; letter-spacing: 1px;" title="{{ panel.server_hint }}">{{ panel.server_label }}</h2>
     </div>
@@ -12,45 +12,233 @@
             </div>
         {% endif %}
 
-        {% if panel.account %}
-            <div class="account-info-grid">
-                <div class="info-item">
-                    <span class="info-label">{% trans "Username" %}</span>
-                    <span class="info-value" style="user-select: all;" title="{{ panel.server_hint }}">{{ panel.username_with_slot|default:panel.account.username }}</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">{% trans "Server" %}</span>
-                    <span class="info-value" style="user-select: all;">{{ panel.server.address }}</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">{% trans "Status" %}</span>
-                    <span class="info-value" style="color: {% if panel.account.is_active %}var(--success-color){% else %}var(--danger-color){% endif %};">
-                        {% if panel.account.is_active %}{% trans "Active" %}{% else %} {% trans "Inactive" %}{% endif %}
-                    </span>
-                </div>
+        <div class="account-info-grid">
+            <div class="info-item">
+                <span class="info-label">{% trans "Selected Pilot" %}</span>
+                <span class="info-value mumble-selected-pilot-name">{{ panel.eligible_pilots.0.character_name }}</span>
             </div>
-            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
-                <form method="post" action="{% url 'mumble:reset_password' panel.server.pk %}">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-outline btn-xs">{% trans "Reset Password" %}</button>
-                </form>
-                <form method="post" action="{% url 'mumble:deactivate' panel.server.pk %}" style="margin-left: auto;">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-outline btn-xs" style="color: var(--danger-color); border-color: var(--danger-color);" onclick="return confirm('{% trans "Deactivate your Murmur account?" %}');">{% trans "Deactivate" %}</button>
-                </form>
+            <div class="info-item">
+                <span class="info-label">{% trans "Username" %}</span>
+                <span class="info-value" style="user-select: all;">
+                    {% if panel.username_with_slot %}
+                        {{ panel.username_with_slot }}
+                    {% elif panel.account and panel.account.username %}
+                        {{ panel.account.username }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </span>
             </div>
-            <form method="post" action="{% url 'mumble:set_password' panel.server.pk %}" style="margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center;">
-                {% csrf_token %}
-                <input type="password" name="murmur_password" placeholder="{% trans 'Custom password (min 8)' %}" minlength="8" required
-                       style="flex: 1; padding: 0.35rem 0.5rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.85rem;">
-                <button type="submit" class="btn btn-outline btn-xs">{% trans "Set Password" %}</button>
-            </form>
-        {% else %}
-            <p style="color: var(--text-muted); margin-bottom: 1rem;">{% trans "Activate a Murmur account to join fleet voice comms." %}</p>
-            <form method="post" action="{% url 'mumble:activate' panel.server.pk %}">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-primary btn-xs">{% trans "Get Murmur Credentials" %}</button>
-            </form>
+            <div class="info-item">
+                <span class="info-label">{% trans "Server" %}</span>
+                <span class="info-value" style="user-select: all;">
+                    {% if panel.server and panel.server.address %}
+                        {{ panel.server.address }}
+                    {% else %}
+                        {% trans "BG unavailable" %}
+                    {% endif %}
+                </span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">{% trans "Status" %}</span>
+                <span class="info-value" style="color: {% if panel.account and panel.account.is_active %}var(--success-color){% elif panel.account %}var(--danger-color){% else %}var(--primary-color){% endif %};">
+                    {% if panel.account and panel.account.is_active %}
+                        {% trans "Active" %}
+                    {% elif panel.account %}
+                        {% trans "Inactive" %}
+                    {% else %}
+                        {% trans "Eligible" %}
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+
+        {% if panel.show_pilot_selector %}
+            <div style="margin-top: 1rem;">
+                <label for="{{ panel.key }}-pilot-selector" class="info-label" style="display: block; margin-bottom: 0.35rem;">{% trans "Mumble Authentication" %}</label>
+                <select
+                    id="{{ panel.key }}-pilot-selector"
+                    class="mumble-pilot-selector"
+                    style="width: 100%; max-width: 22rem; padding: 0.45rem 0.6rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.9rem;"
+                >
+                    {% for pilot in panel.eligible_pilots %}
+                        <option value="{{ pilot.character_id }}"{% if pilot.is_main %} selected{% endif %}>{{ pilot.character_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
         {% endif %}
+
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem;">
+            <form method="post" action="{{ panel.password_reset_url }}" class="mumble-password-form" style="margin: 0;">
+                {% csrf_token %}
+                <input type="hidden" name="pilot_id" class="mumble-pilot-id" value="{{ panel.eligible_pilots.0.character_id }}">
+                {% if panel.server %}
+                    <input type="hidden" name="server_id" value="{{ panel.server.pk }}">
+                {% endif %}
+                <button
+                    type="submit"
+                    class="btn btn-outline btn-xs mumble-password-button"
+                    data-default-label="{% trans 'Reset Password' %}"
+                    data-loading-label="{% trans 'Resetting' %}"
+                    data-success-label="{% trans 'Password reset requested' %}"
+                    data-unavailable-label="{% trans 'BG unavailable' %}"
+                >{% trans "Reset Password" %}</button>
+            </form>
+            <span class="mumble-password-status" style="font-size: 13px; color: var(--text-secondary);"></span>
+        </div>
+
+        <form method="post" action="{{ panel.password_set_url }}" class="mumble-password-form" style="margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            {% csrf_token %}
+            <input type="hidden" name="pilot_id" class="mumble-pilot-id" value="{{ panel.eligible_pilots.0.character_id }}">
+            {% if panel.server %}
+                <input type="hidden" name="server_id" value="{{ panel.server.pk }}">
+            {% endif %}
+            <input
+                type="password"
+                name="murmur_password"
+                class="mumble-password-input"
+                placeholder="{% trans 'Custom password (min 8)' %}"
+                minlength="8"
+                style="flex: 1; min-width: 14rem; padding: 0.35rem 0.5rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.85rem;"
+            >
+            <button
+                type="submit"
+                class="btn btn-outline btn-xs mumble-password-button"
+                data-default-label="{% trans 'Set Password' %}"
+                data-loading-label="{% trans 'Saving' %}"
+                data-success-label="{% trans 'Password update requested' %}"
+                data-unavailable-label="{% trans 'BG unavailable' %}"
+            >{% trans "Set Password" %}</button>
+        </form>
+
+        {% comment %}
+            This profile panel is shown only for ACL-eligible pilots.
+            Main appears first; explicitly allowed alts can be selected here.
+        {% endcomment %}
     </div>
 </div>
+
+<script>
+(function() {
+    if (window.__mumbleProfilePanelInit) {
+        return;
+    }
+    window.__mumbleProfilePanelInit = true;
+
+    function parseJsonResponse(response) {
+        return response.text().then(function(text) {
+            const contentType = response.headers.get('content-type') || '';
+            let data = null;
+
+            if (contentType.indexOf('application/json') !== -1) {
+                try {
+                    data = JSON.parse(text);
+                } catch (error) {
+                    data = null;
+                }
+            }
+
+            return {
+                ok: response.ok,
+                status: response.status,
+                data: data,
+            };
+        });
+    }
+
+    function setPanelUnavailable(panel, statusEl, label) {
+        panel.querySelectorAll('.mumble-password-button').forEach(function(button) {
+            button.disabled = true;
+            button.textContent = label;
+        });
+        panel.querySelectorAll('.mumble-password-input, .mumble-pilot-selector').forEach(function(input) {
+            input.disabled = true;
+        });
+        statusEl.textContent = label;
+        statusEl.style.color = '#e67e22';
+    }
+
+    document.querySelectorAll('.mumble-profile-panel').forEach(function(panel) {
+        const selector = panel.querySelector('.mumble-pilot-selector');
+        const selectedPilotName = panel.querySelector('.mumble-selected-pilot-name');
+        const statusEl = panel.querySelector('.mumble-password-status');
+
+        function syncPilotSelection() {
+            if (!selector) {
+                return;
+            }
+            if (selectedPilotName) {
+                selectedPilotName.textContent = selector.options[selector.selectedIndex].text;
+            }
+            panel.querySelectorAll('.mumble-pilot-id').forEach(function(hiddenInput) {
+                hiddenInput.value = selector.value;
+            });
+        }
+
+        if (selector) {
+            selector.addEventListener('change', syncPilotSelection);
+            syncPilotSelection();
+        }
+
+        panel.querySelectorAll('.mumble-password-form').forEach(function(form) {
+            form.addEventListener('submit', function(event) {
+                event.preventDefault();
+
+                const button = form.querySelector('.mumble-password-button');
+                const defaultLabel = button.dataset.defaultLabel;
+                const loadingLabel = button.dataset.loadingLabel;
+                const successLabel = button.dataset.successLabel;
+                const unavailableLabel = button.dataset.unavailableLabel;
+                const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
+
+                button.disabled = true;
+                button.textContent = loadingLabel;
+                statusEl.textContent = loadingLabel + '...';
+                statusEl.style.color = 'var(--text-secondary)';
+
+                fetch(form.action, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrfToken,
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    body: new FormData(form),
+                })
+                .then(parseJsonResponse)
+                .then(function(result) {
+                    if (!result.data) {
+                        if (result.status >= 502) {
+                            const error = new Error(unavailableLabel);
+                            error.bgUnavailable = true;
+                            throw error;
+                        }
+                        throw new Error('Request failed');
+                    }
+                    if (!result.ok || result.data.error) {
+                        const error = new Error(result.data.error || 'Request failed');
+                        error.bgUnavailable = !!result.data.bg_unavailable;
+                        throw error;
+                    }
+                    button.textContent = successLabel;
+                    statusEl.textContent = result.data.message || successLabel;
+                    statusEl.style.color = '#2ecc71';
+                })
+                .catch(function(error) {
+                    if (error.bgUnavailable) {
+                        setPanelUnavailable(panel, statusEl, unavailableLabel);
+                        return;
+                    }
+                    button.textContent = defaultLabel;
+                    statusEl.textContent = error.message;
+                    statusEl.style.color = '#e74c3c';
+                })
+                .finally(function() {
+                    if (button.textContent !== unavailableLabel) {
+                        button.disabled = false;
+                    }
+                });
+            });
+        });
+    });
+})();
+</script>

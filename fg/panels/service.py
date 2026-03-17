@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from .registry import get_profile_panel_provider
-
 
 class ProfilePanelService:
     """Thin service facade that delegates to configured provider objects."""
@@ -12,6 +10,8 @@ class ProfilePanelService:
         self._host = host
 
     def build_panels(self, request):
+        from .registry import get_profile_panel_provider
+
         provider = get_profile_panel_provider(self._host)
         return provider.build_panels(request)
 
