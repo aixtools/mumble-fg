@@ -157,7 +157,9 @@ def _runtime_registration(pkid: int, *, server_id: int):
 
 def _user_registration(user, *, server_id: int):
     if _host_murmur_models_available():
-        return MumbleUser.objects.filter(user=user, server_id=server_id).select_related('user', 'server').first()
+        local = MumbleUser.objects.filter(user=user, server_id=server_id).select_related('user', 'server').first()
+        if local is not None:
+            return local
 
     registration = _runtime_registration(user.pk, server_id=server_id)
     if registration is not None:
@@ -295,7 +297,7 @@ def activate(request, server_id):
     # Request initial password from BG (BG generates it).
     try:
         password, _ = _sync_password(mumble_user)
-        request.session[f'murmur_temp_password_{server_id}'] = password
+        request.session['murmur_temp_password'] = password
     except MurmurSyncError:
         logger.warning('Initial password request failed for new registration on server=%s', server.pk)
     messages.success(request, _('Murmur account created.'))
@@ -329,7 +331,7 @@ def reset_password(request, server_id):
         mumble_user.mumble_userid = murmur_userid
         mumble_user.save(update_fields=['mumble_userid', 'updated_at'])
     messages.success(request, _('Murmur password has been reset.'))
-    request.session[f'murmur_temp_password_{server_id}'] = password
+    request.session['murmur_temp_password'] = password
     return redirect('profile')
 
 
@@ -372,12 +374,55 @@ def set_password(request, server_id):
 
 
 def _profile_password_action_response(request):
-    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-        return JsonResponse(
-            {'error': _('BG unavailable'), 'bg_unavailable': True},
-            status=503,
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+    # Validate password if provided
+    password = request.POST.get('murmur_password', '').strip() or None
+    if password is not None:
+        if len(password) < 8:
+            if is_ajax:
+                return JsonResponse({'error': _('Password must be at least 8 characters.')}, status=400)
+            messages.error(request, _('Password must be at least 8 characters.'))
+            return redirect('profile')
+        if not _password_has_supported_chars(password):
+            if is_ajax:
+                return JsonResponse({'error': _("Password may not contain any of: ' \" ` \\")}, status=400)
+            messages.error(request, _("Password may not contain any of: ' \" ` \\"))
+            return redirect('profile')
+
+    # Send password directly to BG — BG owns registrations
+    try:
+        response = _CONTROL_CLIENT.reset_password_for_user(
+            user=request.user,
+            password=password,
+            requested_by=str(request.user.get_username() or 'unknown'),
         )
-    messages.warning(request, _('BG unavailable'))
+    except MurmurSyncError as exc:
+        logger.warning('Profile password action failed for user=%s: %s', request.user.pk, exc)
+        if is_ajax:
+            return JsonResponse(
+                {'error': _('BG unavailable'), 'bg_unavailable': True},
+                status=503,
+            )
+        messages.warning(request, _('BG unavailable'))
+        return redirect('profile')
+
+    resolved_password = response.get('password')
+    if password is not None:
+        msg = _('Murmur password updated.')
+    else:
+        msg = _('Murmur password has been reset.')
+
+    if is_ajax:
+        payload = {'status': 'ok', 'message': str(msg)}
+        if password is None and resolved_password:
+            payload['password'] = resolved_password
+        return JsonResponse(payload)
+
+    if password is None and resolved_password:
+        request.session['murmur_temp_password'] = resolved_password
+
+    messages.success(request, msg)
     return redirect('profile')
 
 
