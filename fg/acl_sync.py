@@ -32,6 +32,8 @@ def sync_acl_rules_to_bg(
     trigger: str,
     rule: AccessRule | None = None,
     acl_id: int | None = None,
+    reconcile: bool = True,
+    provision_server_id: int | None = None,
 ) -> dict[str, Any]:
     rules = serialize_acl_rules()
     metadata = {
@@ -40,7 +42,13 @@ def sync_acl_rules_to_bg(
     }
 
     try:
-        response = _CONTROL_CLIENT.sync_access_rules(rules, requested_by=requested_by, is_super=True)
+        response = _CONTROL_CLIENT.sync_access_rules(
+            rules,
+            requested_by=requested_by,
+            is_super=True,
+            reconcile=reconcile,
+            server_id=provision_server_id,
+        )
     except MurmurSyncError as exc:
         metadata.update(
             {
