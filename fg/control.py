@@ -383,7 +383,7 @@ class BgControlClient:
                 {
                     'entity_id': entity_id,
                     'entity_type': entity_type,
-                    'block': deny,
+                    'deny': deny,
                     'note': str(rule.get('note', '') or ''),
                     'created_by': str(rule.get('created_by', '') or ''),
                 }
