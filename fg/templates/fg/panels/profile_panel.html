@@ -220,7 +220,14 @@
                         throw error;
                     }
                     button.textContent = successLabel;
-                    statusEl.textContent = result.data.message || successLabel;
+                    if (result.data.password) {
+                        statusEl.innerHTML = (result.data.message || successLabel) +
+                            ' <code style="user-select: all; font-size: 1.1rem; color: #ffd700; background: var(--darker-bg); padding: 0.25rem 0.5rem; border-radius: 4px;">' +
+                            result.data.password.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') +
+                            '</code>';
+                    } else {
+                        statusEl.textContent = result.data.message || successLabel;
+                    }
                     statusEl.style.color = '#2ecc71';
                 })
                 .catch(function(error) {

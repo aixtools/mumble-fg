@@ -121,7 +121,7 @@ def _request_json(
     result = _decode_json_response(raw)
 
     status = str(result.get('status', 'completed')).lower()
-    allowed_statuses = {'accepted', 'completed'}
+    allowed_statuses = {'accepted', 'completed', 'partial'}
     if allow_not_found:
         allowed_statuses.add('not_found')
     if status not in allowed_statuses:
@@ -329,6 +329,25 @@ class BgControlClient:
         if resolved_password is None:
             raise MurmurSyncError('Control response did not include password')
         return resolved_password, _extract_murmur_userid(response)
+
+    def reset_password_for_user(
+        self,
+        user,
+        password: str | None = None,
+        *,
+        requested_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Send password reset to BG by user pkid — BG resolves server/registration."""
+        payload = {
+            'pkid': user.pk,
+        }
+        if password is not None:
+            from fg.crypto import is_available as crypto_available, encrypt_password
+            if crypto_available():
+                payload['encrypted_password'] = encrypt_password(password)
+            else:
+                payload['password'] = password
+        return _post_json('/v1/password-reset', payload, requested_by=requested_by)
 
     def sync_registration_contract(
         self,
