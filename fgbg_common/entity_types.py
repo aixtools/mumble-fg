@@ -1,0 +1,7 @@
+"""Canonical entity type constants shared by FG and BG."""
+
+ENTITY_TYPE_ALLIANCE = 'alliance'
+ENTITY_TYPE_CORPORATION = 'corporation'
+ENTITY_TYPE_PILOT = 'pilot'
+
+VALID_ENTITY_TYPES = {ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT}

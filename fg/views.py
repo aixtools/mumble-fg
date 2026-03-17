@@ -10,6 +10,21 @@ from django.urls import reverse
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 
+from fgbg_common.eligibility import (
+    account_rule_decisions,
+    blocked_main_list as _common_blocked_main_list,
+    blocked_user_reasons,
+    build_rule_sets,
+    eligible_account_list as _common_eligible_account_list,
+    explicit_rule_match,
+    DENIAL_REASON_RANK,
+)
+from fgbg_common.entity_types import (
+    ENTITY_TYPE_ALLIANCE,
+    ENTITY_TYPE_CORPORATION,
+    ENTITY_TYPE_PILOT,
+)
+
 from .acl_sync import sync_acl_rules_to_bg
 from .control import BgControlClient, MurmurSyncError
 from .host import get_host_adapter
@@ -17,7 +32,7 @@ from .models import (
     ACL_AUDIT_ACTION_CREATE,
     ACL_AUDIT_ACTION_DELETE,
     ACL_AUDIT_ACTION_UPDATE,
-    AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT,
+    AccessRule,
     MumbleUser, MurmurModelLookupError, access_rule_snapshot, append_access_rule_audit,
     resolve_murmur_models,
 )
@@ -838,16 +853,11 @@ def _no_cache_json(data, **kwargs):
 
 
 def _acl_rule_sets():
-    """Parse ACL rules into categorised ID sets."""
-    rules = list(AccessRule.objects.all())
-    return {
-        'allowed_alliances': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_ALLIANCE and not r.deny},
-        'denied_alliances': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_ALLIANCE and r.deny},
-        'allowed_corps': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_CORPORATION and not r.deny},
-        'denied_corps': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_CORPORATION and r.deny},
-        'allowed_pilots': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_PILOT and not r.deny},
-        'denied_pilots': {r.entity_id for r in rules if r.entity_type == ENTITY_TYPE_PILOT and r.deny},
-    }
+    """Parse ACL rules into categorised ID sets via fgbg_common."""
+    rules = list(
+        AccessRule.objects.values('entity_id', 'entity_type', 'deny')
+    )
+    return build_rule_sets(rules)
 
 
 def _eve_char_setup():
@@ -886,82 +896,21 @@ _DENIAL_REASON_LABELS = {
     ENTITY_TYPE_CORPORATION: 'corp',
     ENTITY_TYPE_PILOT: 'pilot',
 }
-_DENIAL_REASON_RANK = {
-    ENTITY_TYPE_ALLIANCE: 1,
-    ENTITY_TYPE_CORPORATION: 2,
-    ENTITY_TYPE_PILOT: 3,
-}
-
-
-def _denial_reason_detail(reason_type, row):
-    if reason_type == ENTITY_TYPE_PILOT:
-        return row['character_name'] or str(row['character_id'])
-    if reason_type == ENTITY_TYPE_CORPORATION:
-        return row['corporation_name'] or str(row['corporation_id'])
-    return row['alliance_name'] or str(row['alliance_id'])
-
-
-def _prefer_denial_reason(current, candidate):
-    if current is None:
-        return candidate
-    current_type = current['reason_type']
-    candidate_type = candidate['reason_type']
-    if _DENIAL_REASON_RANK[candidate_type] > _DENIAL_REASON_RANK[current_type]:
-        return candidate
-    if _DENIAL_REASON_RANK[candidate_type] < _DENIAL_REASON_RANK[current_type]:
-        return current
-    if candidate['detail'].lower() < current['detail'].lower():
-        return candidate
-    return current
-
-
-def _explicit_rule_match(rs, row):
-    if row['character_id'] in rs['allowed_pilots']:
-        return {'action': 'allow', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)}
-    if row['character_id'] in rs['denied_pilots']:
-        return {'action': 'deny', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)}
-    if row['corporation_id'] in rs['allowed_corps']:
-        return {'action': 'allow', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)}
-    if row['corporation_id'] in rs['denied_corps']:
-        return {'action': 'deny', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)}
-    if row['alliance_id'] in rs['allowed_alliances']:
-        return {'action': 'allow', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)}
-    if row['alliance_id'] in rs['denied_alliances']:
-        return {'action': 'deny', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)}
-    return None
-
-
-def _explicit_rule_matches(rs, row):
-    matches = []
-    if row['character_id'] in rs['allowed_pilots']:
-        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)})
-    if row['character_id'] in rs['denied_pilots']:
-        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_PILOT, 'detail': _denial_reason_detail(ENTITY_TYPE_PILOT, row)})
-    if row['corporation_id'] in rs['allowed_corps']:
-        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)})
-    if row['corporation_id'] in rs['denied_corps']:
-        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_CORPORATION, 'detail': _denial_reason_detail(ENTITY_TYPE_CORPORATION, row)})
-    if row['alliance_id'] in rs['allowed_alliances']:
-        matches.append({'action': 'allow', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)})
-    if row['alliance_id'] in rs['denied_alliances']:
-        matches.append({'action': 'deny', 'reason_type': ENTITY_TYPE_ALLIANCE, 'detail': _denial_reason_detail(ENTITY_TYPE_ALLIANCE, row)})
-    return matches
 
 
 def _matching_character_rows(EveCharacter, db, rs):
+    """Host-specific: query EVE character DB for all characters matching any rule."""
     from django.db.models import Q
+    from fgbg_common.eligibility import all_referenced_ids
 
+    ids = all_referenced_ids(rs)
     q = Q()
-    alliance_ids = rs['allowed_alliances'] | rs['denied_alliances']
-    corp_ids = rs['allowed_corps'] | rs['denied_corps']
-    pilot_ids = rs['allowed_pilots'] | rs['denied_pilots']
-
-    if alliance_ids:
-        q |= Q(alliance_id__in=alliance_ids)
-    if corp_ids:
-        q |= Q(corporation_id__in=corp_ids)
-    if pilot_ids:
-        q |= Q(character_id__in=pilot_ids)
+    if ids['alliance_ids']:
+        q |= Q(alliance_id__in=ids['alliance_ids'])
+    if ids['corporation_ids']:
+        q |= Q(corporation_id__in=ids['corporation_ids'])
+    if ids['pilot_ids']:
+        q |= Q(character_id__in=ids['pilot_ids'])
     if not q:
         return []
 
@@ -982,6 +931,7 @@ def _matching_character_rows(EveCharacter, db, rs):
 
 
 def _main_character_rows(EveCharacter, db, user_ids):
+    """Host-specific: fetch main character for each user."""
     mains = {}
     queryset = (
         EveCharacter.objects.using(db)
@@ -1016,104 +966,26 @@ def _resolved_eve_user_id(user, *, db: str):
     return mapped or user.id
 
 
-def _account_rule_decisions(EveCharacter, db, rs):
-    account_rules = {}
-    for row in _matching_character_rows(EveCharacter, db, rs):
-        matches = _explicit_rule_matches(rs, row)
-        if not matches:
-            continue
-        user_rules = account_rules.setdefault(row['user_id'], {'allow': None, 'deny': None})
-        for match in matches:
-            current = user_rules[match['action']]
-            reason = {
-                'reason_type': match['reason_type'],
-                'detail': match['detail'],
-            }
-            user_rules[match['action']] = _prefer_denial_reason(current, reason)
-    return account_rules
-
-
-def _blocked_user_reasons(account_rules):
-    return {
-        user_id: rules['deny']
-        for user_id, rules in account_rules.items()
-        if rules['allow']
-        and rules['deny']
-        and _DENIAL_REASON_RANK[rules['deny']['reason_type']] >= _DENIAL_REASON_RANK[rules['allow']['reason_type']]
-    }
-
-
 def _blocked_main_list(EveCharacter, db, rs):
-    blocked_by_user = _blocked_user_reasons(_account_rule_decisions(EveCharacter, db, rs))
-    if not blocked_by_user:
+    """Delegate to fgbg_common with host-specific data queries."""
+    char_rows = _matching_character_rows(EveCharacter, db, rs)
+    blocked_reasons = blocked_user_reasons(account_rule_decisions(char_rows, rs))
+    if not blocked_reasons:
         return []
-
-    mains = _main_character_rows(EveCharacter, db, blocked_by_user.keys())
-    pilots = []
-    for user_id, reason in blocked_by_user.items():
-        main = mains.get(user_id)
-        if not main:
-            continue
-        denied_as = _DENIAL_REASON_LABELS[reason['reason_type']]
-        denied_detail = reason['detail']
-        character_name = main['character_name']
-        pilots.append(
-            {
-                'character_name': character_name,
-                'display_name': f'{character_name} (denied as: {denied_detail})',
-                'corporation': main['corporation_name'] or '-',
-                'alliance': main['alliance_name'] or '-',
-                'denied_as': denied_as,
-                'denied_detail': denied_detail,
-            }
-        )
-
-    pilots.sort(key=lambda pilot: pilot['character_name'].lower())
-    return pilots
+    mains = _main_character_rows(EveCharacter, db, blocked_reasons.keys())
+    return _common_blocked_main_list(char_rows, mains, rs)
 
 
 def _eligible_account_list(EveCharacter, db, rs):
-    blocked_user_ids = set(_blocked_user_reasons(_account_rule_decisions(EveCharacter, db, rs)))
-    allowed_rows_by_user = {}
-    for row in _matching_character_rows(EveCharacter, db, rs):
-        if row['user_id'] in blocked_user_ids:
-            continue
-        match = _explicit_rule_match(rs, row) or {}
-        if match.get('action') != 'allow':
-            continue
-        allowed_rows_by_user.setdefault(row['user_id'], []).append((row, match))
-
-    if not allowed_rows_by_user:
-        return []
-
-    mains = _main_character_rows(EveCharacter, db, allowed_rows_by_user.keys())
-    pilots = []
-    for user_id, allowed_rows in allowed_rows_by_user.items():
-        main = mains.get(user_id)
-        if not main:
-            continue
-
-        alt_lines = sorted(
-            {
-                row['character_name']
-                for row, match in allowed_rows
-                if match['reason_type'] == ENTITY_TYPE_PILOT
-                and row['character_id'] != main['character_id']
-            },
-            key=str.lower,
-        )
-        pilot_lines = [main['character_name'], *alt_lines]
-        pilots.append(
-            {
-                'character_name': main['character_name'],
-                'pilot_lines': pilot_lines,
-                'corporation': main['corporation_name'] or '-',
-                'alliance': main['alliance_name'] or '-',
-            }
-        )
-
-    pilots.sort(key=lambda pilot: pilot['character_name'].lower())
-    return pilots
+    """Delegate to fgbg_common with host-specific data queries."""
+    char_rows = _matching_character_rows(EveCharacter, db, rs)
+    blocked_reasons = blocked_user_reasons(account_rule_decisions(char_rows, rs))
+    if not blocked_reasons:
+        all_user_ids = {row['user_id'] for row in char_rows}
+    else:
+        all_user_ids = {row['user_id'] for row in char_rows} - set(blocked_reasons)
+    mains = _main_character_rows(EveCharacter, db, all_user_ids)
+    return _common_eligible_account_list(char_rows, mains, rs)
 
 
 def profile_password_pilot_choices(user):
@@ -1128,14 +1000,15 @@ def profile_password_pilot_choices(user):
         return []
 
     rs = _acl_rule_sets()
-    if eve_user_id in _blocked_user_reasons(_account_rule_decisions(EveCharacter, db, rs)):
+    char_rows = _matching_character_rows(EveCharacter, db, rs)
+    if eve_user_id in blocked_user_reasons(account_rule_decisions(char_rows, rs)):
         return []
 
     allowed_rows = []
-    for row in _matching_character_rows(EveCharacter, db, rs):
+    for row in char_rows:
         if row['user_id'] != eve_user_id:
             continue
-        match = _explicit_rule_match(rs, row) or {}
+        match = explicit_rule_match(rs, row) or {}
         if match.get('action') != 'allow':
             continue
         allowed_rows.append((row, match))

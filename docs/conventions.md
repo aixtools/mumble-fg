@@ -223,25 +223,27 @@ source against these rules.
 
 ### Tables (admin-managed in FG, copied to BG via control channel)
 
-- **allowed_access**: alliance IDs — an alliance is either in or out
-- **blocked_access**: corp IDs, pilot IDs — within an allowed alliance
+- **Allowed alliances** — an alliance is either in or out. Unlisted alliances are implicitly denied.
+- **Denied corps** — corps within an allowed alliance that are denied access.
+- **Denied pilots** — individual pilots denied regardless of alliance/corp status.
+- **Allowed pilots** — individual overrides that rescue access even when corp or alliance is denied.
 
 ### Precedence (most specific wins)
 
-1. **Pilot allow/block** overrides everything
-2. **Corp block** applies if no pilot-level override exists
-3. **Alliance allow** is the baseline
+1. **Pilot allow/deny** overrides everything
+2. **Corp deny** applies if no pilot-level override exists
+3. **Alliance allow** is the baseline (unlisted alliances are implicitly denied)
 
-A blocked corp within an allowed alliance denies that corp's members — but an
+A denied corp within an allowed alliance blocks that corp's members — but an
 explicit pilot-level allow for a specific member of that corp restores their
-access. This gives admins surgical control: allow an alliance, block a
+access. This gives admins surgical control: allow an alliance, deny a
 problematic corp, but still whitelist specific trusted pilots from that corp.
 
 ### Account-wide enforcement
 
-Block checks apply across the **entire account**, not just the main character.
-If the main **or any alt** matches a blocked corp or pilot ID, the whole account
-is denied — unless a pilot-level allow overrides it.
+Deny checks apply across the **entire account**, not just the main character.
+If the main **or any alt** matches a deny rule (alliance, corp, or pilot), the
+whole account is denied — unless a pilot-level allow overrides it.
 
 ### Ownership
 
