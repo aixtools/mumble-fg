@@ -335,11 +335,13 @@ class BgControlClient:
         user,
         password: str | None = None,
         *,
+        pkid: int | None = None,
         requested_by: str | None = None,
     ) -> dict[str, Any]:
         """Send password reset to BG by user pkid — BG resolves server/registration."""
+        resolved_pkid = int(pkid) if pkid is not None else int(user.pk)
         payload = {
-            'pkid': user.pk,
+            'pkid': resolved_pkid,
         }
         if password is not None:
             from fg.crypto import is_available as crypto_available, encrypt_password
@@ -383,6 +385,9 @@ class BgControlClient:
         *,
         requested_by: str | None = None,
         is_super: bool = True,
+        reconcile: bool = False,
+        server_id: int | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         payload_rules: list[dict[str, Any]] = []
         for idx, rule in enumerate(rules):
@@ -412,7 +417,7 @@ class BgControlClient:
                 }
             )
 
-        return _post_json(
+        response = _post_json(
             '/v1/access-rules/sync',
             {
                 'is_super': bool(is_super),
@@ -420,6 +425,25 @@ class BgControlClient:
             },
             requested_by=requested_by,
         )
+
+        # Optional: push eligibility into BG provisioning and Murmur reconcile.
+        # This is a second request to preserve historical /v1/access-rules/sync
+        # semantics while allowing immediate state convergence when desired.
+        if reconcile:
+            provision_payload: dict[str, Any] = {
+                'dry_run': bool(dry_run),
+                'reconcile': True,
+            }
+            if server_id is not None:
+                provision_payload['server_id'] = int(server_id)
+            provision_response = _post_json(
+                '/v1/provision',
+                provision_payload,
+                requested_by=requested_by,
+            )
+            response['provision'] = provision_response
+
+        return response
 
 
 __all__ = [

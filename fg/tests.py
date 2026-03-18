@@ -1,5 +1,7 @@
 import json
 from datetime import timedelta
+import os
+import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,8 +18,14 @@ from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cu
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
-from fg.models import AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_PILOT, MumbleUser
-from fg.runtime import RuntimeRegistration, RuntimeServer
+from fg.models import (
+    AccessRule,
+    ENTITY_TYPE_ALLIANCE,
+    ENTITY_TYPE_PILOT,
+    MumbleUser,
+    MurmurModelLookupError,
+)
+from fg.runtime import BgRuntimeService, RuntimeRegistration, RuntimeServer
 from fg.views import (
     _get_mumble_username,
     _compute_display_name,
@@ -30,6 +38,10 @@ _NO_REDIS = dict(
     CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
     SESSION_ENGINE='django.contrib.sessions.backends.db',
 )
+
+_RUN_HOST_MURMUR_TESTS = os.environ.get('FG_RUN_HOST_MURMUR_TESTS', '0') in {
+    '1', 'true', 'True', 'yes', 'Yes', 'on', 'On',
+}
 
 
 class _JsonResponseStub:
@@ -47,8 +59,13 @@ class _JsonResponseStub:
 
 
 def _make_server(**kwargs):
+    if not _RUN_HOST_MURMUR_TESTS:
+        raise unittest.SkipTest('Host Murmur test models are disabled in this environment.')
     from fg.models import resolve_murmur_model
-    MumbleServer = resolve_murmur_model('MumbleServer')
+    try:
+        MumbleServer = resolve_murmur_model('MumbleServer')
+    except MurmurModelLookupError:
+        raise unittest.SkipTest('Host Murmur test models are unavailable in this environment.')
     defaults = dict(
         name='Test Server',
         address='mumble.example.com:64738',
@@ -439,6 +456,63 @@ class ContractMetadataSyncTest(TestCase):
         with self.assertRaises(MurmurSyncError):
             self.control_client.sync_registration_contract(self.mu, evepilot_id='not-an-int', is_super=True)
         mock_post_json.assert_not_called()
+
+
+class AccessRuleSyncClientTest(TestCase):
+    def setUp(self):
+        self.control_client = BgControlClient()
+
+    @patch('fg.control._post_json')
+    def test_sync_access_rules_without_reconcile_only_posts_access_rules(self, mock_post_json):
+        mock_post_json.return_value = {'status': 'completed', 'total': 1}
+
+        response = self.control_client.sync_access_rules(
+            [{'entity_id': 99000001, 'entity_type': 'pilot', 'deny': True, 'note': 'seed', 'created_by': 'tester'}],
+            requested_by='test-user',
+            is_super=False,
+        )
+
+        self.assertEqual(response, {'status': 'completed', 'total': 1})
+        mock_post_json.assert_called_once()
+        path, payload = mock_post_json.call_args.args
+        self.assertEqual(path, '/v1/access-rules/sync')
+        self.assertFalse(payload['is_super'])
+        self.assertEqual(payload['rules'][0]['entity_id'], 99000001)
+        self.assertEqual(payload['rules'][0]['entity_type'], 'pilot')
+
+    @patch('fg.control._post_json')
+    def test_sync_access_rules_with_reconcile_posts_provision_payload(self, mock_post_json):
+        responses = [
+            {'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0},
+            {'status': 'completed', 'murmur_reconcile': [{'server': 'main', 'action': 'noop'}]},
+        ]
+
+        def side_effect(*args, **kwargs):
+            return responses.pop(0)
+
+        mock_post_json.side_effect = side_effect
+
+        response = self.control_client.sync_access_rules(
+            [{'entity_id': 99000001, 'entity_type': 'pilot', 'deny': False, 'note': 'seed', 'created_by': 'tester'}],
+            requested_by='sync-user',
+            is_super=True,
+            reconcile=True,
+            server_id=7,
+            dry_run=True,
+        )
+
+        self.assertEqual(response['status'], 'completed')
+        self.assertIn('provision', response)
+        self.assertEqual(response['provision']['status'], 'completed')
+        self.assertEqual(mock_post_json.call_count, 2)
+        first_path, first_payload = mock_post_json.call_args_list[0].args
+        second_path, second_payload = mock_post_json.call_args_list[1].args
+        self.assertEqual(first_path, '/v1/access-rules/sync')
+        self.assertEqual(first_payload['rules'][0]['entity_id'], 99000001)
+        self.assertEqual(second_path, '/v1/provision')
+        self.assertTrue(second_payload['reconcile'])
+        self.assertTrue(second_payload['dry_run'])
+        self.assertEqual(second_payload['server_id'], 7)
 
 
 # ── Views ───────────────────────────────────────────────────────────
@@ -848,6 +922,45 @@ class RuntimeFallbackAccountViewsTest(TestCase):
         synced_registration = mock_unregister_remote_registration.call_args.args[0]
         self.assertIsInstance(synced_registration, RuntimeRegistration)
         self.assertEqual(synced_registration.user, self.user)
+
+
+class RuntimePayloadCompatibilityTest(TestCase):
+    def setUp(self):
+        self.server = RuntimeServer(
+            id=77,
+            name='Test Runtime Server',
+            address='runtime.example.com:64738',
+        )
+        self.service = BgRuntimeService()
+
+    def test_runtime_parser_prefers_pkid(self):
+        registration = self.service._registration_from_payload(
+            {
+                'pkid': 901,
+                'server_id': 77,
+                'server_name': 'Runtime Server',
+                'username': 'Pilot_Main',
+                'active_session_ids': [12, 13],
+            },
+            servers_by_id={77: self.server},
+        )
+
+        self.assertIsNotNone(registration)
+        self.assertEqual(registration.user_id, 901)
+        self.assertEqual(registration.server_id, self.server.id)
+
+    def test_runtime_parser_rejects_missing_pkid(self):
+        registration = self.service._registration_from_payload(
+            {
+                'user_id': 902,
+                'server_id': 77,
+                'server_name': 'Runtime Server',
+                'username': 'Pilot_Alt',
+            },
+            servers_by_id={77: self.server},
+        )
+
+        self.assertIsNone(registration)
 
 
 @override_settings(**_NO_REDIS, MURMUR_MODEL_APP_LABEL='missing_app_label')
@@ -1355,6 +1468,23 @@ class ProfilePasswordPanelActionTest(TestCase):
         self.assertJSONEqual(
             response.content,
             {'error': 'BG unavailable', 'bg_unavailable': True},
+        )
+
+    @patch(
+        'fg.views._CONTROL_CLIENT.reset_password_for_user',
+        side_effect=MurmurSyncError('Control request failed (404): Mumble registration not found'),
+    )
+    def test_profile_reset_password_returns_inactive_for_ajax_when_bg_available(self, _mock_reset):
+        response = self.client.post(
+            reverse('mumble:profile_reset_password'),
+            {'pilot_id': self.main.character_id},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertJSONEqual(
+            response.content,
+            {'error': 'Mumble account inactive, try again later.', 'bg_unavailable': False},
         )
 
 

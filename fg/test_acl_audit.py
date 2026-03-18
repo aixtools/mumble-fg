@@ -220,6 +220,19 @@ class ACLAuditTest(TestCase):
         self.assertEqual(data['total'], 1)
         self.assertIn('ACL synchronized to BG', data['message'])
 
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
+    def test_sync_acl_rules_defaults_to_reconcile(self, mock_sync_access_rules):
+        _grant_acl_perm(self.user, 'view_accessrule')
+        _grant_acl_perm(self.user, 'change_accessrule')
+        AccessRule.objects.create(entity_id=123456, entity_type='pilot', deny=False, note='seed')
+
+        response = self.client.post(reverse('mumble:acl_sync'))
+
+        self.assertEqual(response.status_code, 302)
+        mock_sync_access_rules.assert_called_once()
+        _, kwargs = mock_sync_access_rules.call_args
+        self.assertIs(kwargs.get('reconcile'), True)
+
     @patch('fg.views._sync_acl_rules_after_change', side_effect=MurmurSyncError('Control endpoint unreachable: connection refused'))
     def test_manual_sync_ajax_reports_bg_unavailable(self, mock_sync_acl_rules_after_change):
         _grant_acl_perm(self.user, 'view_accessrule')

@@ -135,9 +135,11 @@ class BgRuntimeService:
         *,
         servers_by_id: dict[int, RuntimeServer],
     ) -> RuntimeRegistration | None:
-        user_id = _coerce_int(payload.get('pkid'))
+        pkid = _coerce_int(payload.get('pkid'))
+        if pkid is None:
+            return None
         server_id = _coerce_int(payload.get('server_id'))
-        if user_id is None or server_id is None:
+        if server_id is None:
             return None
         server = servers_by_id.get(server_id) or self._fallback_server_from_registration(payload)
         if server is None:
@@ -150,7 +152,7 @@ class BgRuntimeService:
             )
         )
         return RuntimeRegistration(
-            user_id=user_id,
+            user_id=pkid,
             server=server,
             username=str(payload.get('username', '') or '').strip(),
             display_name=str(payload.get('display_name', '') or '').strip(),

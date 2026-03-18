@@ -1,6 +1,7 @@
 import json
 import logging
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth import get_user_model
@@ -375,6 +376,7 @@ def set_password(request, server_id):
 
 def _profile_password_action_response(request):
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    pilot_id_raw = str(request.POST.get('pilot_id', '') or '').strip()
 
     # Validate password if provided
     password = request.POST.get('murmur_password', '').strip() or None
@@ -390,21 +392,35 @@ def _profile_password_action_response(request):
             messages.error(request, _("Password may not contain any of: ' \" ` \\"))
             return redirect('profile')
 
+    target_pkid = request.user.pk
+    if _mockui_enabled():
+        mapped_pkid = _resolve_bg_pkid_for_mockui(request.user, pilot_id_raw)
+        if mapped_pkid is not None:
+            target_pkid = mapped_pkid
+
     # Send password directly to BG — BG owns registrations
     try:
         response = _CONTROL_CLIENT.reset_password_for_user(
             user=request.user,
             password=password,
+            pkid=target_pkid,
             requested_by=str(request.user.get_username() or 'unknown'),
         )
     except MurmurSyncError as exc:
         logger.warning('Profile password action failed for user=%s: %s', request.user.pk, exc)
+        bg_unavailable = _bg_unavailable_error(exc)
+        inactive_message = _('Mumble account inactive, try again later.')
         if is_ajax:
+            if bg_unavailable:
+                return JsonResponse(
+                    {'error': _('BG unavailable'), 'bg_unavailable': True},
+                    status=503,
+                )
             return JsonResponse(
-                {'error': _('BG unavailable'), 'bg_unavailable': True},
-                status=503,
+                {'error': inactive_message, 'bg_unavailable': False},
+                status=409,
             )
-        messages.warning(request, _('BG unavailable'))
+        messages.warning(request, _('BG unavailable') if bg_unavailable else inactive_message)
         return redirect('profile')
 
     resolved_password = response.get('password')
@@ -424,6 +440,39 @@ def _profile_password_action_response(request):
 
     messages.success(request, msg)
     return redirect('profile')
+
+
+def _mockui_enabled() -> bool:
+    if bool(getattr(settings, 'MOCKUI', False)):
+        return True
+    return str(getattr(settings, 'UI', '') or '').strip().lower() == 'mock'
+
+
+def _resolve_bg_pkid_for_mockui(user, pilot_id_raw: str) -> int | None:
+    """Map selected character_id (or user) to Eve user_id for BG control payloads."""
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None:
+        return None
+
+    if pilot_id_raw:
+        try:
+            character_id = int(pilot_id_raw)
+        except ValueError:
+            return None
+        row = (
+            EveCharacter.objects.using(db)
+            .filter(character_id=character_id, pending_delete=False)
+            .values('user_id')
+            .first()
+        )
+        if row and row.get('user_id') is not None:
+            return int(row['user_id'])
+        return None
+
+    resolved = _resolved_eve_user_id(user, db=db)
+    if resolved is None:
+        return None
+    return int(resolved)
 
 
 def _validate_profile_password_choice(request):
