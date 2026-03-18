@@ -25,6 +25,7 @@ This document captures explicit contracts and implicit conventions between:
 - BG computes delta against current state.
 - If delta is empty: no state change and no BG ACL audit row.
 - If delta exists: BG applies create/update/delete, then writes ACL audit row.
+- Sync is full-table replacement on BG (rules not present in payload are removed).
 
 ### 1.4 Provision Contract
 - FG can request reconcile/provision after ACL sync (`/v1/provision`).
@@ -35,6 +36,7 @@ This document captures explicit contracts and implicit conventions between:
 - Blocked:
   - existing active BG user -> deactivate
   - missing user -> no-op
+- FG periodic sync (scheduler/command) uses this same ACL sync path so disconnect windows self-heal.
 
 ### 1.5 Password Reset Contract
 - FG reset/set actions target BG by `pkid` (BG-side user identity).
@@ -46,6 +48,7 @@ This document captures explicit contracts and implicit conventions between:
 - Registration sync endpoint updates or creates Murmur registration for one BG user.
 - Disable endpoint unregisters when present; missing registration is no-op.
 - BG audits Murmur user creation events.
+- Provisioning alone does not imply bulk Murmur registration creation; that is a separate registration sync step.
 
 ## 2) Explicit Admin Contracts
 
@@ -86,6 +89,8 @@ This document captures explicit contracts and implicit conventions between:
 - Precedence is most-specific wins:
   - pilot > corporation > alliance
 - Deny-on-alt can block account-level eligibility unless overridden by more-specific allow.
+- Baseline is allow-by-rule-presence with alliance allow as the broadest allow path.
+- Unlisted alliances are implicitly denied for eligibility (no allow path).
 
 ### 4.3 Operational Convention
 - `mockbg.sh` is the local operator surface for mock stack lifecycle and sync.
