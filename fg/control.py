@@ -27,6 +27,12 @@ class MurmurSyncError(RuntimeError):
 
 
 def _control_base_url() -> str:
+    env_url = (
+        os.getenv('MURMUR_CONTROL_URL', '').strip()
+        or os.getenv('MURMUR_CONTROL_BASE_URL', '').strip()
+    )
+    if env_url:
+        return env_url.rstrip('/')
     return (
         getattr(settings, 'MURMUR_CONTROL_URL', None)
         or getattr(settings, 'MURMUR_CONTROL_BASE_URL', None)
@@ -44,6 +50,9 @@ def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
         headers['Content-Type'] = 'application/json'
 
     shared_secret = (
+        os.getenv('MURMUR_CONTROL_PSK', '').strip()
+        or os.getenv('MURMUR_CONTROL_SHARED_SECRET', '').strip()
+        or
         getattr(settings, 'MURMUR_CONTROL_PSK', None)
         or getattr(settings, 'MURMUR_CONTROL_SHARED_SECRET', None)
         or ''
