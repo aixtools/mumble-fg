@@ -14,7 +14,7 @@
 
         <div class="account-info-grid">
             <div class="info-item">
-                <span class="info-label">{% trans "Selected Pilot" %}</span>
+                <span class="info-label">{% trans "Display Name" %}</span>
                 <span class="info-value mumble-selected-pilot-name">{{ panel.eligible_pilots.0.character_name }}</span>
             </div>
             <div class="info-item">
@@ -30,24 +30,22 @@
                 </span>
             </div>
             <div class="info-item">
-                <span class="info-label">{% trans "Server" %}</span>
+                <span class="info-label">{% trans "Address" %}</span>
                 <span class="info-value" style="user-select: all;">
-                    {% if panel.server and panel.server.address %}
-                        {{ panel.server.address }}
+                    {% if panel.server_address %}
+                        {{ panel.server_address }}
                     {% else %}
                         {% trans "BG unavailable" %}
                     {% endif %}
                 </span>
             </div>
             <div class="info-item">
-                <span class="info-label">{% trans "Status" %}</span>
-                <span class="info-value" style="color: {% if panel.account and panel.account.is_active %}var(--success-color){% elif panel.account %}var(--danger-color){% else %}var(--primary-color){% endif %};">
-                    {% if panel.account and panel.account.is_active %}
-                        {% trans "Active" %}
-                    {% elif panel.account %}
-                        {% trans "Inactive" %}
+                <span class="info-label">{% trans "Port" %}</span>
+                <span class="info-value" style="user-select: all;">
+                    {% if panel.server_port %}
+                        {{ panel.server_port }}
                     {% else %}
-                        {% trans "Eligible" %}
+                        -
                     {% endif %}
                 </span>
             </div>
