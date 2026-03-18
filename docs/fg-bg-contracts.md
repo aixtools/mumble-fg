@@ -37,6 +37,7 @@ This document captures explicit contracts and implicit conventions between:
   - existing active BG user -> deactivate
   - missing user -> no-op
 - FG periodic sync (scheduler/command) uses this same ACL sync path so disconnect windows self-heal.
+- Even when ACL sync is `noop`, BG still performs eligibility/provision and Murmur reconciliation.
 
 ### 1.5 Password Reset Contract
 - FG reset/set actions target BG by `pkid` (BG-side user identity).
@@ -46,9 +47,10 @@ This document captures explicit contracts and implicit conventions between:
 
 ### 1.6 Murmur Registration Contract
 - Registration sync endpoint updates or creates Murmur registration for one BG user.
-- Disable endpoint unregisters when present; missing registration is no-op.
+- Disable endpoint keeps registration present and sets disabled state (does not delete row).
 - BG audits Murmur user creation events.
-- Provisioning alone does not imply bulk Murmur registration creation; that is a separate registration sync step.
+- BG sync/reconcile ensures all active BG users are present in Murmur (except unmanaged Murmur SuperUser).
+- Inactive BG users are kept in Murmur but forced into disabled state; disable transitions are audited.
 
 ## 2) Explicit Admin Contracts
 
@@ -60,6 +62,7 @@ This document captures explicit contracts and implicit conventions between:
 - FG ACL audit is append-only.
 - BG audit is append-only.
 - Audit rows are not editable/deletable by normal admin flows.
+- Pilot-related BG audit actions are: `pilot_create`, `pilot_disable`, `pilot_enable`, `pilot_pwreset`.
 
 ### 2.3 Sync UX
 - Sync is non-blocking from UI perspective.
