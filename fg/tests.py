@@ -1,5 +1,7 @@
 import json
 from datetime import timedelta
+import os
+import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,7 +18,13 @@ from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cu
 from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
-from fg.models import AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_PILOT, MumbleUser
+from fg.models import (
+    AccessRule,
+    ENTITY_TYPE_ALLIANCE,
+    ENTITY_TYPE_PILOT,
+    MumbleUser,
+    MurmurModelLookupError,
+)
 from fg.runtime import BgRuntimeService, RuntimeRegistration, RuntimeServer
 from fg.views import (
     _get_mumble_username,
@@ -30,6 +38,10 @@ _NO_REDIS = dict(
     CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
     SESSION_ENGINE='django.contrib.sessions.backends.db',
 )
+
+_RUN_HOST_MURMUR_TESTS = os.environ.get('FG_RUN_HOST_MURMUR_TESTS', '0') in {
+    '1', 'true', 'True', 'yes', 'Yes', 'on', 'On',
+}
 
 
 class _JsonResponseStub:
@@ -47,8 +59,13 @@ class _JsonResponseStub:
 
 
 def _make_server(**kwargs):
+    if not _RUN_HOST_MURMUR_TESTS:
+        raise unittest.SkipTest('Host Murmur test models are disabled in this environment.')
     from fg.models import resolve_murmur_model
-    MumbleServer = resolve_murmur_model('MumbleServer')
+    try:
+        MumbleServer = resolve_murmur_model('MumbleServer')
+    except MurmurModelLookupError:
+        raise unittest.SkipTest('Host Murmur test models are unavailable in this environment.')
     defaults = dict(
         name='Test Server',
         address='mumble.example.com:64738',
