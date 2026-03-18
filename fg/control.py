@@ -335,11 +335,13 @@ class BgControlClient:
         user,
         password: str | None = None,
         *,
+        pkid: int | None = None,
         requested_by: str | None = None,
     ) -> dict[str, Any]:
         """Send password reset to BG by user pkid — BG resolves server/registration."""
+        resolved_pkid = int(pkid) if pkid is not None else int(user.pk)
         payload = {
-            'pkid': user.pk,
+            'pkid': resolved_pkid,
         }
         if password is not None:
             from fg.crypto import is_available as crypto_available, encrypt_password

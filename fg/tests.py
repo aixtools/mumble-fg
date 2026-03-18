@@ -1470,6 +1470,23 @@ class ProfilePasswordPanelActionTest(TestCase):
             {'error': 'BG unavailable', 'bg_unavailable': True},
         )
 
+    @patch(
+        'fg.views._CONTROL_CLIENT.reset_password_for_user',
+        side_effect=MurmurSyncError('Control request failed (404): Mumble registration not found'),
+    )
+    def test_profile_reset_password_returns_inactive_for_ajax_when_bg_available(self, _mock_reset):
+        response = self.client.post(
+            reverse('mumble:profile_reset_password'),
+            {'pilot_id': self.main.character_id},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertJSONEqual(
+            response.content,
+            {'error': 'Mumble account inactive, try again later.', 'bg_unavailable': False},
+        )
+
 
 # ── Profile integration ────────────────────────────────────────────
 
