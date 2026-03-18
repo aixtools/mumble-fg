@@ -26,6 +26,8 @@ class MurmurPanelDescriptor:
     username_with_slot: str | None
     server_label: str
     server_hint: str
+    server_address: str
+    server_port: str
     eligible_pilots: tuple[dict[str, Any], ...]
     show_pilot_selector: bool
     password_reset_url: str
@@ -42,6 +44,8 @@ class MurmurPanelDescriptor:
             'username_with_slot': self.username_with_slot,
             'server_label': self.server_label,
             'server_hint': self.server_hint,
+            'server_address': self.server_address,
+            'server_port': self.server_port,
             'eligible_pilots': list(self.eligible_pilots),
             'show_pilot_selector': self.show_pilot_selector,
             'password_reset_url': self.password_reset_url,
@@ -113,6 +117,24 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             return explicit_name
         return str(getattr(server, 'address', '') or '').strip()
 
+    @staticmethod
+    def _server_address_port(server) -> tuple[str, str]:
+        if server is None:
+            return '', ''
+        address = str(getattr(server, 'address', '') or '').strip()
+        if not address:
+            return '', ''
+        if address.startswith('[') and ']:' in address:
+            # IPv6 form: [addr]:port
+            end = address.find(']')
+            host = address[1:end]
+            port = address[end + 2 :]
+            return host, str(port or '').strip()
+        if ':' in address:
+            host, port = address.rsplit(':', 1)
+            return str(host).strip(), str(port).strip()
+        return address, ''
+
     def _panel_descriptor(
         self,
         *,
@@ -127,6 +149,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             username = str(getattr(account, 'username', '') or '').strip()
             if username:
                 username_with_slot = f'{username}{slot_suffix or ""}'
+        server_address, server_port = self._server_address_port(server)
 
         return MurmurPanelDescriptor(
             key=f'murmur-server-{getattr(server, "pk", "profile")}',
@@ -138,6 +161,8 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             username_with_slot=username_with_slot,
             server_label=self._server_label(server) if server is not None else 'Mumble Authentication',
             server_hint=self._server_hint(server) if server is not None else 'Profile password panel',
+            server_address=server_address,
+            server_port=server_port,
             eligible_pilots=tuple(eligible_pilots),
             show_pilot_selector=len(eligible_pilots) > 1,
             password_reset_url=reverse('mumble:profile_reset_password'),
