@@ -379,7 +379,8 @@ def _profile_password_action_response(request):
     pilot_id_raw = str(request.POST.get('pilot_id', '') or '').strip()
 
     # Validate password if provided
-    password = request.POST.get('murmur_password', '').strip() or None
+    raw_password = request.POST.get('murmur_password', '')
+    password = raw_password if raw_password != '' else None
     if password is not None:
         if len(password) < 8:
             if is_ajax:
@@ -393,10 +394,9 @@ def _profile_password_action_response(request):
             return redirect('profile')
 
     target_pkid = request.user.pk
-    if _mockui_enabled():
-        mapped_pkid = _resolve_bg_pkid_for_mockui(request.user, pilot_id_raw)
-        if mapped_pkid is not None:
-            target_pkid = mapped_pkid
+    mapped_pkid = _resolve_bg_pkid_for_mockui(request.user, pilot_id_raw)
+    if mapped_pkid is not None:
+        target_pkid = mapped_pkid
 
     # Send password directly to BG — BG owns registrations
     try:

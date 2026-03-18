@@ -161,7 +161,20 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                 ).to_panel_context()
             ]
 
-        accounts_by_server = self._accounts_by_server(request.user.id)
+        target_user_id = request.user.id
+        try:
+            from fg.views import _resolve_bg_pkid_for_mockui
+
+            if eligible_pilots:
+                primary_character_id = str(eligible_pilots[0].get('character_id') or '')
+                mapped_pkid = _resolve_bg_pkid_for_mockui(request.user, primary_character_id)
+                if mapped_pkid is not None:
+                    target_user_id = int(mapped_pkid)
+        except Exception:  # noqa: BLE001
+            # Fall back to host user id when mock-only mapping is unavailable.
+            target_user_id = request.user.id
+
+        accounts_by_server = self._accounts_by_server(target_user_id)
         slot_labels = self._slot_labels(accounts_by_server)
 
         descriptors: list[MurmurPanelDescriptor] = []
