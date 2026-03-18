@@ -17,7 +17,7 @@ from fg.integration import CubeMurmurIntegration
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
 from fg.models import AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_PILOT, MumbleUser
-from fg.runtime import RuntimeRegistration, RuntimeServer
+from fg.runtime import BgRuntimeService, RuntimeRegistration, RuntimeServer
 from fg.views import (
     _get_mumble_username,
     _compute_display_name,
@@ -905,6 +905,48 @@ class RuntimeFallbackAccountViewsTest(TestCase):
         synced_registration = mock_unregister_remote_registration.call_args.args[0]
         self.assertIsInstance(synced_registration, RuntimeRegistration)
         self.assertEqual(synced_registration.user, self.user)
+
+
+class RuntimePayloadCompatibilityTest(TestCase):
+    def setUp(self):
+        self.server = RuntimeServer(
+            id=77,
+            name='Test Runtime Server',
+            address='runtime.example.com:64738',
+        )
+        self.service = BgRuntimeService()
+
+    def test_runtime_parser_prefers_pkid(self):
+        registration = self.service._registration_from_payload(
+            {
+                'pkid': 901,
+                'user_id': 999,
+                'server_id': 77,
+                'server_name': 'Runtime Server',
+                'username': 'Pilot_Main',
+                'active_session_ids': [12, 13],
+            },
+            servers_by_id={77: self.server},
+        )
+
+        self.assertIsNotNone(registration)
+        self.assertEqual(registration.user_id, 901)
+        self.assertEqual(registration.server_id, self.server.id)
+
+    def test_runtime_parser_falls_back_to_user_id(self):
+        registration = self.service._registration_from_payload(
+            {
+                'user_id': 902,
+                'server_id': 77,
+                'server_name': 'Runtime Server',
+                'username': 'Pilot_Alt',
+            },
+            servers_by_id={77: self.server},
+        )
+
+        self.assertIsNotNone(registration)
+        self.assertEqual(registration.user_id, 902)
+        self.assertEqual(registration.server_id, self.server.id)
 
 
 @override_settings(**_NO_REDIS, MURMUR_MODEL_APP_LABEL='missing_app_label')

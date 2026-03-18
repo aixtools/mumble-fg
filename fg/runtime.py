@@ -136,6 +136,8 @@ class BgRuntimeService:
         servers_by_id: dict[int, RuntimeServer],
     ) -> RuntimeRegistration | None:
         user_id = _coerce_int(payload.get('pkid'))
+        if user_id is None:
+            user_id = _coerce_int(payload.get('user_id'))
         server_id = _coerce_int(payload.get('server_id'))
         if user_id is None or server_id is None:
             return None
