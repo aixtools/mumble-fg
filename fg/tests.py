@@ -920,7 +920,6 @@ class RuntimePayloadCompatibilityTest(TestCase):
         registration = self.service._registration_from_payload(
             {
                 'pkid': 901,
-                'user_id': 999,
                 'server_id': 77,
                 'server_name': 'Runtime Server',
                 'username': 'Pilot_Main',
@@ -933,7 +932,7 @@ class RuntimePayloadCompatibilityTest(TestCase):
         self.assertEqual(registration.user_id, 901)
         self.assertEqual(registration.server_id, self.server.id)
 
-    def test_runtime_parser_falls_back_to_user_id(self):
+    def test_runtime_parser_rejects_missing_pkid(self):
         registration = self.service._registration_from_payload(
             {
                 'user_id': 902,
@@ -944,9 +943,7 @@ class RuntimePayloadCompatibilityTest(TestCase):
             servers_by_id={77: self.server},
         )
 
-        self.assertIsNotNone(registration)
-        self.assertEqual(registration.user_id, 902)
-        self.assertEqual(registration.server_id, self.server.id)
+        self.assertIsNone(registration)
 
 
 @override_settings(**_NO_REDIS, MURMUR_MODEL_APP_LABEL='missing_app_label')
