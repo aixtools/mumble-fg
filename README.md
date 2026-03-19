@@ -94,3 +94,7 @@ Shared fg/bg naming and boundary conventions are documented in [docs/conventions
 Dev deploy/bootstrap guidance is documented in [docs/bootstrap-dev-deploy.md](/home/michael/prj/mumble-fg/docs/bootstrap-dev-deploy.md).
 FG/BG smoke-test checklist is documented in [docs/fg-bg-integration-smoke.md](/home/michael/prj/mumble-fg/docs/fg-bg-integration-smoke.md).
 Backup and restore verification steps are documented in [docs/pilot-backup-restore-probe.md](/home/michael/prj/mumble-fg/docs/pilot-backup-restore-probe.md).
+
+FG+BG installation sequencing and helper scripts are maintained in the BG repo under `installation/`:
+- `../mumble-bg/installation/README.md`
+- `../mumble-bg/installation/installation.md`
