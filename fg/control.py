@@ -19,7 +19,7 @@ from django.utils.timezone import now
 from fg.contracts import MurmurContract
 
 REQUEST_TIMEOUT_SECONDS = 5
-CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:8000'
+CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:18080'
 
 
 class MurmurSyncError(RuntimeError):
