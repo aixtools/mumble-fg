@@ -47,8 +47,10 @@ Those seams should be redesigned explicitly rather than left shared implicitly.
 
 ## Pilot Eligibility Rules
 
-FG owns the access-control list (ACL) and pushes decisions to BG via the control channel.
-BG independently provisions Mumble accounts from these rules.
+FG owns the access-control list (ACL) and is the only side that reads host/pilot
+data. FG pushes both ACL rules and a full account-oriented pilot snapshot to BG
+via the control channel. BG provisions Mumble accounts from that cached snapshot
+plus the synced ACL rules.
 
 ### Decision Tables (admin-managed in FG)
 
@@ -88,7 +90,11 @@ The ACL panel provides two on-demand pilot lists:
 ACL changes now trigger an immediate full-table FG→BG sync, and the ACL page
 also exposes a manual `Sync BG` action for users with `change_accessrule`.
 For host-side scheduling, `manage.py sync_mumble_acl` runs the same full-table
-sync and appends a `sync` audit entry.
+sync and appends a `sync` audit entry. The sync sequence is:
+
+1. send ACL rules to `/v1/access-rules/sync`
+2. send pilot snapshot to `/v1/pilot-snapshot/sync`
+3. optionally request reconcile via `/v1/provision`
 
 Shared fg/bg naming and boundary conventions are documented in [docs/conventions.md](/home/michael/prj/mumble-fg/docs/conventions.md).
 Dev deploy/bootstrap guidance is documented in [docs/bootstrap-dev-deploy.md](/home/michael/prj/mumble-fg/docs/bootstrap-dev-deploy.md).

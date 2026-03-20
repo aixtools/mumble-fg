@@ -514,6 +514,58 @@ class AccessRuleSyncClientTest(TestCase):
         self.assertTrue(second_payload['dry_run'])
         self.assertEqual(second_payload['server_id'], 7)
 
+    @patch('fg.control._post_json')
+    def test_sync_access_rules_with_snapshot_posts_snapshot_before_provision(self, mock_post_json):
+        responses = [
+            {'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0},
+            {'status': 'completed', 'changed': True, 'account_count': 1, 'character_count': 2},
+            {'status': 'completed', 'murmur_reconcile': [{'server': 'main', 'action': 'noop'}]},
+        ]
+
+        def side_effect(*args, **kwargs):
+            return responses.pop(0)
+
+        mock_post_json.side_effect = side_effect
+
+        response = self.control_client.sync_access_rules(
+            [{'entity_id': 99000001, 'entity_type': 'pilot', 'deny': False, 'note': 'seed', 'created_by': 'tester'}],
+            requested_by='sync-user',
+            is_super=True,
+            pilot_snapshot={
+                'generated_at': '2026-03-20T00:00:00Z',
+                'accounts': [
+                    {
+                        'pkid': 42,
+                        'characters': [
+                            {
+                                'character_id': 9001,
+                                'character_name': 'Pilot One',
+                                'corporation_id': 77,
+                                'corporation_name': 'Corp One',
+                                'alliance_id': 88,
+                                'alliance_name': 'Alliance One',
+                                'is_main': True,
+                            }
+                        ],
+                    }
+                ],
+            },
+            reconcile=True,
+        )
+
+        self.assertEqual(response['status'], 'completed')
+        self.assertIn('pilot_snapshot', response)
+        self.assertIn('provision', response)
+        self.assertEqual(mock_post_json.call_count, 3)
+        first_path, _ = mock_post_json.call_args_list[0].args
+        second_path, second_payload = mock_post_json.call_args_list[1].args
+        third_path, _ = mock_post_json.call_args_list[2].args
+        self.assertEqual(first_path, '/v1/access-rules/sync')
+        self.assertEqual(second_path, '/v1/pilot-snapshot/sync')
+        self.assertTrue(second_payload['is_super'])
+        self.assertEqual(second_payload['accounts'][0]['pkid'], 42)
+        self.assertEqual(third_path, '/v1/provision')
+
 
 # ── Views ───────────────────────────────────────────────────────────
 

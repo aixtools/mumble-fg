@@ -5,6 +5,7 @@ from typing import Any
 
 from .control import BgControlClient, MurmurSyncError
 from .models import ACL_AUDIT_ACTION_SYNC, AccessRule, append_access_rule_audit
+from .pilot_snapshot import PilotSnapshotError, serialize_pilot_snapshot
 
 logger = logging.getLogger(__name__)
 _CONTROL_CLIENT = BgControlClient()
@@ -36,10 +37,12 @@ def sync_acl_rules_to_bg(
     provision_server_id: int | None = None,
 ) -> dict[str, Any]:
     rules = serialize_acl_rules()
+    pilot_snapshot = serialize_pilot_snapshot()
     control_url = _CONTROL_CLIENT.base_url()
     metadata = {
         'trigger': str(trigger or ''),
         'acl_count': len(rules),
+        'pilot_snapshot_account_count': len(pilot_snapshot.get('accounts', [])),
     }
 
     try:
@@ -47,10 +50,11 @@ def sync_acl_rules_to_bg(
             rules,
             requested_by=requested_by,
             is_super=True,
+            pilot_snapshot=pilot_snapshot,
             reconcile=reconcile,
             server_id=provision_server_id,
         )
-    except MurmurSyncError as exc:
+    except (MurmurSyncError, PilotSnapshotError) as exc:
         metadata.update(
             {
                 'sync_status': 'failed',
