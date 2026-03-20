@@ -36,6 +36,7 @@ def sync_acl_rules_to_bg(
     provision_server_id: int | None = None,
 ) -> dict[str, Any]:
     rules = serialize_acl_rules()
+    control_url = _CONTROL_CLIENT.base_url()
     metadata = {
         'trigger': str(trigger or ''),
         'acl_count': len(rules),
@@ -54,6 +55,7 @@ def sync_acl_rules_to_bg(
             {
                 'sync_status': 'failed',
                 'error': str(exc),
+                'control_url': control_url,
             }
         )
         append_access_rule_audit(
@@ -64,7 +66,13 @@ def sync_acl_rules_to_bg(
             source=source,
             metadata=metadata,
         )
-        logger.warning('ACL sync failed for source=%s requested_by=%s: %s', source, requested_by, exc)
+        logger.warning(
+            'ACL sync failed for source=%s requested_by=%s control_url=%s: %s',
+            source,
+            requested_by,
+            control_url,
+            exc,
+        )
         raise
 
     metadata.update(

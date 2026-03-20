@@ -10,6 +10,7 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 
 from accounts.models import UserProfile
+from fg.acl_sync import sync_acl_rules_to_bg
 from fg.admin import AccessRuleAdmin
 from fg.control import MurmurSyncError
 from fg.models import (
@@ -248,6 +249,30 @@ class ACLAuditTest(TestCase):
         data = response.json()
         self.assertEqual(data['error'], 'BG unavailable')
         self.assertTrue(data['bg_unavailable'])
+
+    @patch('fg.acl_sync._CONTROL_CLIENT.base_url', return_value='http://monitor.aixtools.org:18080')
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', side_effect=MurmurSyncError('Control endpoint unreachable: [Errno 111] Connection refused'))
+    def test_sync_failure_logs_control_url_and_audits_it(self, mock_sync_access_rules, mock_base_url):
+        AccessRule.objects.create(entity_id=123456, entity_type='pilot', deny=False, note='seed')
+
+        with self.assertLogs('fg.acl_sync', level='WARNING') as captured:
+            with self.assertRaises(MurmurSyncError):
+                sync_acl_rules_to_bg(
+                    requested_by='leorises',
+                    actor_username=self.user.username,
+                    source='acl_ui_sync',
+                    trigger='manual',
+                )
+
+        mock_sync_access_rules.assert_called_once()
+        mock_base_url.assert_called_once_with()
+        self.assertIn(
+            'ACL sync failed for source=acl_ui_sync requested_by=leorises control_url=http://monitor.aixtools.org:18080',
+            captured.output[0],
+        )
+        audit = AccessRuleAudit.objects.get(action=ACL_AUDIT_ACTION_SYNC)
+        self.assertEqual(audit.metadata['sync_status'], 'failed')
+        self.assertEqual(audit.metadata['control_url'], 'http://monitor.aixtools.org:18080')
 
     @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
     def test_periodic_command_logs_audit_entry(self, mock_sync_access_rules):

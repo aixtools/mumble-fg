@@ -201,6 +201,9 @@ def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[
 class BgControlClient:
     """OO adapter for FG -> BG control and probe endpoints."""
 
+    def base_url(self) -> str:
+        return _control_base_url()
+
     def list_servers(self) -> list[dict[str, Any]]:
         response = _get_json('/v1/servers')
         servers = response.get('servers')
