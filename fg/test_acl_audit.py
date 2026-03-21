@@ -50,6 +50,12 @@ class ACLAuditTest(TestCase):
         self.factory = RequestFactory()
         self.admin_site = AdminSite()
         self.admin = AccessRuleAdmin(AccessRule, self.admin_site)
+        pilot_snapshot = patch(
+            'fg.acl_sync.serialize_pilot_snapshot',
+            return_value={'generated_at': '2026-03-20T00:00:00Z', 'accounts': []},
+        )
+        self.mock_serialize_pilot_snapshot = pilot_snapshot.start()
+        self.addCleanup(pilot_snapshot.stop)
 
     @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 1, 'updated': 0, 'deleted': 0})
     def test_batch_create_logs_audit_entry(self, mock_sync_access_rules):

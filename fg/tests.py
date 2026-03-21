@@ -317,24 +317,30 @@ class MumbleModelTest(TestCase):
 
 
 class ControlClientAuthTest(TestCase):
-    @override_settings(MURMUR_CONTROL_PSK='primary-control-secret')
+    @override_settings(FGBG_PSK='primary-control-secret')
     @patch('fg.control.urlopen')
-    def test_post_json_sends_control_psk_header(self, mock_urlopen):
+    def test_post_json_sends_fgbg_psk_headers(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
 
         _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
 
         request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header('X-fgbg-psk'), 'primary-control-secret')
         self.assertEqual(request.get_header('X-murmur-control-psk'), 'primary-control-secret')
 
-    @override_settings(MURMUR_CONTROL_PSK='', MURMUR_CONTROL_SHARED_SECRET='fallback-control-secret')
+    @override_settings(
+        FGBG_PSK='',
+        MURMUR_CONTROL_PSK='',
+        MURMUR_CONTROL_SHARED_SECRET='fallback-control-secret',
+    )
     @patch('fg.control.urlopen')
-    def test_post_json_uses_shared_secret_fallback_header(self, mock_urlopen):
+    def test_post_json_uses_legacy_shared_secret_fallback_header(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
 
         _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
 
         request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header('X-fgbg-psk'), 'fallback-control-secret')
         self.assertEqual(request.get_header('X-murmur-control-psk'), 'fallback-control-secret')
 
 

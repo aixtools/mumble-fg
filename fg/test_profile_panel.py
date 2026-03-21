@@ -54,6 +54,9 @@ def _make_character(
 class ProfilePanelEligibilityTest(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
+        eve_setup = patch('fg.views._eve_char_setup', return_value=(EveCharacter, 'default'))
+        self.mock_eve_setup = eve_setup.start()
+        self.addCleanup(eve_setup.stop)
         self.user = _make_member('eligibleprofileuser')
         self.main = _make_character(
             self.user,
@@ -155,6 +158,9 @@ class ProfilePanelEligibilityTest(TestCase):
 @override_settings(**_NO_REDIS)
 class ProfilePasswordActionTest(TestCase):
     def setUp(self):
+        eve_setup = patch('fg.views._eve_char_setup', return_value=(EveCharacter, 'default'))
+        self.mock_eve_setup = eve_setup.start()
+        self.addCleanup(eve_setup.stop)
         self.user = _make_member('passwordpaneluser')
         self.client.force_login(self.user)
         self.main = _make_character(

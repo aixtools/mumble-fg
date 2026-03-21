@@ -11,6 +11,7 @@ This document captures explicit contracts and implicit conventions between:
 - FG is host/UI/admin.
 - BG is runtime/state daemon.
 - FG is the only side that reads host/pilot data.
+- FG reads `PILOT_DBMS`; BG owns `BG_DBMS`.
 - FG does not read BG DB directly.
 - BG does not read FG/host DB directly.
 - BG does not write FG/host tables.
@@ -18,7 +19,7 @@ This document captures explicit contracts and implicit conventions between:
 - Integration is API-only (control/probe endpoints).
 
 ### 1.2 Control Channel Auth
-- FG calls BG control endpoints with shared secret auth (`MURMUR_CONTROL_PSK`).
+- FG calls BG control endpoints with shared secret auth (`FGBG_PSK`).
 - Missing/invalid secret is rejected (`401`).
 - If BG is unreachable, FG treats operations as unavailable.
 

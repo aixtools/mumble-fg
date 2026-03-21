@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -21,10 +22,20 @@ def _make_member(username='aclviewer'):
     return user
 
 
+def _grant_acl_perm(user, codename):
+    permission = Permission.objects.get(
+        content_type=ContentType.objects.get_for_model(AccessRule),
+        codename=codename,
+    )
+    user.user_permissions.add(permission)
+
+
 @override_settings(**_NO_REDIS)
 class ACLBlockedViewTest(TestCase):
     def setUp(self):
         self.viewer = _make_member()
+        _grant_acl_perm(self.viewer, 'view_accessrule')
+        self.viewer = User.objects.get(pk=self.viewer.pk)
         self.client.force_login(self.viewer)
         eve_setup = patch('fg.views._eve_char_setup', return_value=(EveCharacter, 'default'))
         self.mock_eve_setup = eve_setup.start()

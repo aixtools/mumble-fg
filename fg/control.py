@@ -51,14 +51,19 @@ def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
         headers['Content-Type'] = 'application/json'
 
     shared_secret = (
+        os.getenv('FGBG_PSK', '').strip()
+        or
         os.getenv('MURMUR_CONTROL_PSK', '').strip()
         or os.getenv('MURMUR_CONTROL_SHARED_SECRET', '').strip()
+        or
+        getattr(settings, 'FGBG_PSK', None)
         or
         getattr(settings, 'MURMUR_CONTROL_PSK', None)
         or getattr(settings, 'MURMUR_CONTROL_SHARED_SECRET', None)
         or ''
     ).strip()
     if shared_secret:
+        headers['X-FGBG-PSK'] = shared_secret
         headers['X-Murmur-Control-PSK'] = shared_secret
     return headers
 

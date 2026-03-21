@@ -22,6 +22,7 @@ This document is the active, consolidated operating document for the `mumble-fg`
 
 ## Host/Integration Contract
 
+- FG is the only side that reads `PILOT_DBMS`; BG receives pilot snapshot data over control APIs.
 - `fg` should be the only package installed in `mockcube`.
 - `mockcube` should not import BG ORM models directly for FG admin/operator flows.
 - `fg` runtime should prefer:
@@ -46,6 +47,13 @@ This document is the active, consolidated operating document for the `mumble-fg`
 3. Ensure BG endpoints are reached through explicit control URL and secret settings.
 4. Keep mockcube-compatible compatibility shims minimal and explicit.
 5. If a test or code path depends on host Murmur tables, mark/guard accordingly.
+
+## Companion Docs
+
+- [conventions.md](./conventions.md)
+- [workflow-deploy.md](./workflow-deploy.md)
+- [fg-bg-integration-smoke.md](./fg-bg-integration-smoke.md)
+- [pilot-backup-restore-probe.md](./pilot-backup-restore-probe.md)
 
 ## Archived Documentation Index
 
