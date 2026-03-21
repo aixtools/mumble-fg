@@ -32,6 +32,12 @@ class GenericMurmurHostAdapter:
     def has_alliance_leader_membership(self, user) -> bool:
         return False
 
+    def get_alliance_ticker(self, alliance_id: int | None) -> str:
+        return ''
+
+    def get_corporation_ticker(self, corporation_id: int | None) -> str:
+        return ''
+
 
 class CubeMurmurHostAdapter(GenericMurmurHostAdapter):
     """Cube-style adapter that resolves optional host integrations lazily."""
@@ -94,6 +100,32 @@ class CubeMurmurHostAdapter(GenericMurmurHostAdapter):
             status='approved',
             group__in=alliance_groups,
         ).exists()
+
+    def get_alliance_ticker(self, alliance_id: int | None) -> str:
+        if not alliance_id:
+            return ''
+        try:
+            accounts_models = self._accounts_models_module()
+        except ImportError:
+            return ''
+        EveAllianceInfo = getattr(accounts_models, 'EveAllianceInfo', None)
+        if EveAllianceInfo is None:
+            return ''
+        row = EveAllianceInfo.objects.filter(alliance_id=alliance_id).only('alliance_ticker').first()
+        return str(getattr(row, 'alliance_ticker', '') or '')
+
+    def get_corporation_ticker(self, corporation_id: int | None) -> str:
+        if not corporation_id:
+            return ''
+        try:
+            accounts_models = self._accounts_models_module()
+        except ImportError:
+            return ''
+        EveCorporationInfo = getattr(accounts_models, 'EveCorporationInfo', None)
+        if EveCorporationInfo is None:
+            return ''
+        row = EveCorporationInfo.objects.filter(corporation_id=corporation_id).only('corporation_ticker').first()
+        return str(getattr(row, 'corporation_ticker', '') or '')
 
 
 class AllianceAuthMurmurHostAdapter(GenericMurmurHostAdapter):

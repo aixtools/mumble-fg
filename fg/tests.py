@@ -12,7 +12,7 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.models import EveCharacter, Group, GroupMembership, UserProfile
+from accounts.models import EveAllianceInfo, EveCharacter, EveCorporationInfo, Group, GroupMembership, UserProfile
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
@@ -199,43 +199,42 @@ class ComputeDisplayNameTest(TestCase):
     def setUp(self):
         self.user = User.objects.create_user('testuser', password='pass')
 
-    def _mock_ticker(self, alliance_ticker=None, corp_ticker=None):
-        """Return a side_effect function for _get_ticker that returns controlled values."""
-        def side_effect(endpoint, label):
-            if 'alliances' in endpoint and alliance_ticker is not None:
-                return alliance_ticker
-            if 'corporations' in endpoint and corp_ticker is not None:
-                return corp_ticker
-            return ''
-        return side_effect
+    def _cache_orgs(self, *, alliance_id=None, alliance_ticker='', corporation_id=None, corp_ticker=''):
+        if alliance_id:
+            EveAllianceInfo.objects.create(
+                alliance_id=alliance_id,
+                alliance_name='Alliance',
+                alliance_ticker=alliance_ticker,
+            )
+        if corporation_id:
+            EveCorporationInfo.objects.create(
+                corporation_id=corporation_id,
+                corporation_name='Corporation',
+                corporation_ticker=corp_ticker,
+            )
 
-    @patch('fg.views._get_ticker')
-    def test_alliance_and_corp_tickers(self, mock_get_ticker):
+    def test_alliance_and_corp_tickers(self):
         _make_char(self.user, alliance_id=99000001, corporation_id=98000001)
-        mock_get_ticker.side_effect = self._mock_ticker('ALLY', 'CORP')
+        self._cache_orgs(alliance_id=99000001, alliance_ticker='ALLY', corporation_id=98000001, corp_ticker='CORP')
         result = _compute_display_name(self.user)
         self.assertEqual(result, '[ALLY CORP] Test Pilot')
 
-    @patch('fg.views._get_ticker')
-    def test_alliance_only(self, mock_get_ticker):
+    def test_alliance_only(self):
         _make_char(self.user, alliance_id=99000001, corporation_id=98000001)
-        mock_get_ticker.side_effect = self._mock_ticker('ALLY', '')
+        self._cache_orgs(alliance_id=99000001, alliance_ticker='ALLY')
         result = _compute_display_name(self.user)
-        self.assertEqual(result, '[ALLY] Test Pilot')
+        self.assertEqual(result, '[ALLY ????] Test Pilot')
 
-    @patch('fg.views._get_ticker')
-    def test_corp_only(self, mock_get_ticker):
+    def test_corp_only(self):
         _make_char(self.user, corporation_id=98000001)
-        mock_get_ticker.side_effect = self._mock_ticker(None, 'CORP')
+        self._cache_orgs(corporation_id=98000001, corp_ticker='CORP')
         result = _compute_display_name(self.user)
         self.assertEqual(result, '[CORP] Test Pilot')
 
-    @patch('fg.views._get_ticker')
-    def test_no_tickers(self, mock_get_ticker):
+    def test_unknown_tickers_use_placeholder(self):
         _make_char(self.user, alliance_id=99000001, corporation_id=98000001)
-        mock_get_ticker.side_effect = self._mock_ticker('', '')
         result = _compute_display_name(self.user)
-        self.assertEqual(result, 'Test Pilot')
+        self.assertEqual(result, '[???? ????] Test Pilot')
 
     def test_no_main_character(self):
         result = _compute_display_name(self.user)
@@ -1309,6 +1308,51 @@ class ProfilePanelProviderTest(TestCase):
         usernames = sorted(panel['username_with_slot'] for panel in panels if panel['username_with_slot'])
 
         self.assertEqual(usernames, ['Pilot_Name:1', 'Pilot_Name:2'])
+
+    def test_panel_prefers_computed_display_name(self):
+        EveAllianceInfo.objects.create(
+            alliance_id=501001,
+            alliance_name='Panel Alliance',
+            alliance_ticker='ALLY',
+        )
+        EveCorporationInfo.objects.create(
+            corporation_id=401001,
+            corporation_name='Panel Corp',
+            corporation_ticker='CORP',
+        )
+        MumbleUser.objects.create(
+            user=self.user,
+            server=self.server1,
+            username='Panel_Main',
+            display_name='Old Display Name',
+            pwhash='h',
+        )
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
+        self.assertEqual(panel['display_name'], '[ALLY CORP] Panel Main')
+        self.assertFalse(panel['display_name_is_fallback'])
+
+    def test_panel_uses_placeholder_display_name_when_cached_tickers_are_missing(self):
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
+        self.assertEqual(panel['display_name'], '[???? ????] Panel Main')
+        self.assertFalse(panel['display_name_is_fallback'])
+
+    @patch('fg.views._compute_display_name', side_effect=RuntimeError('broken display-name computation'))
+    def test_panel_falls_back_to_character_name_when_display_name_unavailable(self, _mock_display_name):
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
+        self.assertEqual(panel['display_name'], 'Panel Main')
+        self.assertTrue(panel['display_name_is_fallback'])
 
     def test_temp_password_is_read_once(self):
         MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')

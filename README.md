@@ -34,7 +34,6 @@ This split is intentionally incomplete. The Django code here still expects broad
 
 - `accounts`
 - `modules.corporation`
-- `modules.esi_queue`
 - Murmur contract models resolved through `fg.models`
 - host account/permission adapters resolved through `fg.host`
 - fg/bg control transport through `fg.control`

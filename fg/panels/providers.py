@@ -24,6 +24,8 @@ class MurmurPanelDescriptor:
     account: Any
     temp_password: str | None
     username_with_slot: str | None
+    display_name: str
+    display_name_is_fallback: bool
     server_label: str
     server_hint: str
     server_address: str
@@ -42,6 +44,8 @@ class MurmurPanelDescriptor:
             'account': self.account,
             'temp_password': self.temp_password,
             'username_with_slot': self.username_with_slot,
+            'display_name': self.display_name,
+            'display_name_is_fallback': self.display_name_is_fallback,
             'server_label': self.server_label,
             'server_hint': self.server_hint,
             'server_address': self.server_address,
@@ -150,6 +154,11 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             if username:
                 username_with_slot = f'{username}{slot_suffix or ""}'
         server_address, server_port = self._server_address_port(server)
+        display_name, display_name_is_fallback = self._display_name(
+            request.user,
+            account=account,
+            eligible_pilots=eligible_pilots,
+        )
 
         return MurmurPanelDescriptor(
             key=f'murmur-server-{getattr(server, "pk", "profile")}',
@@ -159,6 +168,8 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             account=account,
             temp_password=request.session.pop('murmur_temp_password', None),
             username_with_slot=username_with_slot,
+            display_name=display_name,
+            display_name_is_fallback=display_name_is_fallback,
             server_label=self._server_label(server) if server is not None else 'Mumble Authentication',
             server_hint=self._server_hint(server) if server is not None else 'Profile password panel',
             server_address=server_address,
@@ -168,6 +179,25 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             password_reset_url=reverse('mumble:profile_reset_password'),
             password_set_url=reverse('mumble:profile_set_password'),
         )
+
+    @staticmethod
+    def _display_name(user, *, account, eligible_pilots: list[dict[str, Any]]) -> tuple[str, bool]:
+        try:
+            from fg.views import _compute_display_name
+
+            computed = str(_compute_display_name(user) or '').strip()
+            if computed:
+                return computed, False
+        except Exception:  # noqa: BLE001
+            pass
+
+        stored = str(getattr(account, 'display_name', '') or '').strip()
+        if stored:
+            return stored, False
+
+        if eligible_pilots:
+            return str(eligible_pilots[0].get('character_name') or ''), True
+        return '', True
 
     def build_panels(self, request) -> list[dict[str, Any]]:
         eligible_pilots = self._eligible_pilots(request.user)

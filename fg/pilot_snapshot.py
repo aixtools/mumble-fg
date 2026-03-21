@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.contrib.auth import get_user_model
 from django.db import connections, router
 from django.utils.timezone import now
 
@@ -56,7 +57,25 @@ def build_pilot_snapshot() -> PilotSnapshot:
     except Exception as exc:  # noqa: BLE001
         raise PilotSnapshotError(f'Failed to build pilot snapshot: {exc}') from exc
 
-    return PilotSnapshot.from_rows(rows, generated_at=now().isoformat())
+    snapshot = PilotSnapshot.from_rows(rows, generated_at=now().isoformat())
+    user_model = get_user_model()
+    user_db_alias = router.db_for_read(user_model) or 'default'
+    users_by_id = {
+        int(user.id): user
+        for user in user_model.objects.using(user_db_alias).filter(id__in=[account.pkid for account in snapshot.accounts])
+    }
+
+    from fg.views import _compute_display_name
+
+    accounts = tuple(
+        type(account)(
+            pkid=account.pkid,
+            display_name=_compute_display_name(users_by_id.get(account.pkid)) if users_by_id.get(account.pkid) else '',
+            characters=account.characters,
+        )
+        for account in snapshot.accounts
+    )
+    return PilotSnapshot(accounts=accounts, generated_at=snapshot.generated_at)
 
 
 def serialize_pilot_snapshot() -> dict[str, Any]:

@@ -15,7 +15,10 @@
         <div class="account-info-grid">
             <div class="info-item">
                 <span class="info-label">{% trans "Display Name" %}</span>
-                <span class="info-value mumble-selected-pilot-name">{{ panel.eligible_pilots.0.character_name }}</span>
+                <span
+                    class="info-value mumble-selected-pilot-name"
+                    data-fallback="{% if panel.display_name_is_fallback %}1{% else %}0{% endif %}"
+                >{% if panel.display_name %}{{ panel.display_name }}{% else %}-{% endif %}</span>
             </div>
             <div class="info-item">
                 <span class="info-label">{% trans "Username" %}</span>
@@ -165,7 +168,7 @@
             if (!selector) {
                 return;
             }
-            if (selectedPilotName) {
+            if (selectedPilotName && selectedPilotName.dataset.fallback === '1') {
                 selectedPilotName.textContent = selector.options[selector.selectedIndex].text;
             }
             panel.querySelectorAll('.mumble-pilot-id').forEach(function(hiddenInput) {

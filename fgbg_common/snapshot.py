@@ -75,6 +75,7 @@ class PilotCharacter:
 class PilotAccount:
     pkid: int
     characters: tuple[PilotCharacter, ...]
+    display_name: str = ''
 
     def __post_init__(self):
         if not self.characters:
@@ -83,11 +84,12 @@ class PilotAccount:
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> 'PilotAccount':
         pkid = _coerce_int(payload.get('pkid', payload.get('user_id')), field_name='pkid')
+        display_name = _coerce_text(payload.get('display_name', ''), field_name='display_name')
         raw_characters = payload.get('characters')
         if not isinstance(raw_characters, (list, tuple)):
             raise ValueError('characters must be a list')
         characters = tuple(_normalize_characters(PilotCharacter.from_mapping(item) for item in raw_characters))
-        return cls(pkid=pkid, characters=characters)
+        return cls(pkid=pkid, display_name=display_name, characters=characters)
 
     @property
     def main_character(self) -> PilotCharacter:
@@ -99,6 +101,7 @@ class PilotAccount:
     def as_dict(self) -> dict[str, Any]:
         return {
             'pkid': self.pkid,
+            'display_name': self.display_name,
             'characters': [character.as_dict() for character in self.characters],
         }
 
@@ -167,10 +170,19 @@ class PilotSnapshot:
         *,
         generated_at: str = '',
     ) -> 'PilotSnapshot':
-        grouped: dict[int, list[PilotCharacter]] = {}
+        grouped: dict[int, dict[str, Any]] = {}
         for row in rows:
             pkid = _coerce_int(row.get('pkid', row.get('user_id')), field_name='pkid')
-            grouped.setdefault(pkid, []).append(
+            bucket = grouped.setdefault(
+                pkid,
+                {
+                    'display_name': _coerce_text(row.get('display_name', ''), field_name='display_name'),
+                    'characters': [],
+                },
+            )
+            if not bucket['display_name']:
+                bucket['display_name'] = _coerce_text(row.get('display_name', ''), field_name='display_name')
+            bucket['characters'].append(
                 PilotCharacter(
                     character_id=_coerce_int(row.get('character_id'), field_name='character_id'),
                     character_name=_coerce_text(row.get('character_name', ''), field_name='character_name'),
@@ -182,8 +194,12 @@ class PilotSnapshot:
                 )
             )
         accounts = tuple(
-            PilotAccount(pkid=pkid, characters=tuple(_normalize_characters(characters)))
-            for pkid, characters in sorted(grouped.items())
+            PilotAccount(
+                pkid=pkid,
+                display_name=str(bucket['display_name'] or ''),
+                characters=tuple(_normalize_characters(bucket['characters'])),
+            )
+            for pkid, bucket in sorted(grouped.items())
         )
         return cls(accounts=accounts, generated_at=generated_at)
 
