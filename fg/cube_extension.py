@@ -26,4 +26,8 @@ def get_periodic_tasks():
             'task': 'fg.tasks.periodic_acl_sync',
             'schedule': crontab(minute='*/10'),
         },
+        'mumble_fg.periodic_group_sync': {
+            'task': 'fg.tasks.update_all_mumble_groups',
+            'schedule': crontab(minute=0),
+        },
     }

@@ -218,19 +218,18 @@ def _compute_display_name(user):
     char_name = main.character_name
     tags = []
 
-    if main.alliance_id:
-        ticker = _get_ticker(
-            f'/alliances/{main.alliance_id}/', 'alliance'
-        )
-        if ticker:
-            tags.append(ticker)
+    # Prefer tickers from the host database; fall back to ESI.
+    alliance_ticker = getattr(main, 'alliance_ticker', '') or ''
+    if not alliance_ticker and main.alliance_id:
+        alliance_ticker = _get_ticker(f'/alliances/{main.alliance_id}/', 'alliance')
+    if alliance_ticker:
+        tags.append(alliance_ticker)
 
-    if main.corporation_id:
-        ticker = _get_ticker(
-            f'/corporations/{main.corporation_id}/', 'corporation'
-        )
-        if ticker:
-            tags.append(ticker)
+    corporation_ticker = getattr(main, 'corporation_ticker', '') or ''
+    if not corporation_ticker and main.corporation_id:
+        corporation_ticker = _get_ticker(f'/corporations/{main.corporation_id}/', 'corporation')
+    if corporation_ticker:
+        tags.append(corporation_ticker)
 
     if tags:
         result = f'[{" ".join(tags)}] {char_name}'
