@@ -253,6 +253,33 @@ class AccessRuleAudit(models.Model):
         return f'{self.action.upper()} {self.source or "acl"}'
 
 
+class PilotSnapshotHash(models.Model):
+    """FG-side cache of per-account pilot snapshot hashes sent to BG."""
+
+    pkid = models.BigIntegerField(
+        unique=True,
+        help_text='Stable FG/BG account identity key.',
+    )
+    pilot_data_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        db_index=True,
+        help_text='Hash of pilot snapshot payload for this account (md5 placeholder).',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_pilot_snapshot_hash'
+        ordering = ['pkid']
+        verbose_name = 'pilot snapshot hash'
+        verbose_name_plural = 'pilot snapshot hashes'
+
+    def __str__(self):
+        return f'{self.pkid}:{self.pilot_data_hash}'
+
+
 def append_access_rule_audit(
     *,
     action: str,
@@ -310,6 +337,7 @@ __all__ = [
     'MumbleUser',
     'MurmurModelLookupError',
     'MurmurModelResolver',
+    'PilotSnapshotHash',
     'ResolvedMurmurModels',
     'access_rule_snapshot',
     'append_access_rule_audit',

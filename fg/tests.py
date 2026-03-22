@@ -16,6 +16,7 @@ from accounts.models import EveAllianceInfo, EveCharacter, EveCorporationInfo, G
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
+from fg.pilot_snapshot import build_pilot_snapshot, serialize_pilot_snapshot
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
 from fg.models import (
@@ -24,6 +25,7 @@ from fg.models import (
     ENTITY_TYPE_PILOT,
     MumbleUser,
     MurmurModelLookupError,
+    PilotSnapshotHash,
 )
 from fg.runtime import BgRuntimeService, RuntimeRegistration, RuntimeServer
 from fg.views import (
@@ -144,13 +146,15 @@ class GetMumbleUsernameTest(TestCase):
 
     def test_with_main_character(self):
         _make_char(self.user)
-        self.assertEqual(_get_mumble_username(self.user), 'Test_Pilot')
+        self.assertEqual(_get_mumble_username(self.user), 'testuser')
 
     def test_without_main_character(self):
         self.assertEqual(_get_mumble_username(self.user), 'testuser')
 
     def test_spaces_replaced(self):
-        _make_char(self.user, character_id=99999, character_name='A B C')
+        self.user.username = 'A B C'
+        self.user.save(update_fields=['username'])
+        _make_char(self.user, character_id=99999, character_name='Ignored Character')
         self.assertEqual(_get_mumble_username(self.user), 'A_B_C')
 
 
@@ -239,6 +243,28 @@ class ComputeDisplayNameTest(TestCase):
     def test_no_main_character(self):
         result = _compute_display_name(self.user)
         self.assertEqual(result, 'testuser')
+
+
+class PilotSnapshotExportTest(TestCase):
+    def test_snapshot_includes_account_username(self):
+        user = _make_member('cube_login_name')
+        _make_char(user, character_id=777001, character_name='Snapshot Main')
+
+        snapshot = build_pilot_snapshot().as_dict()
+        self.assertEqual(len(snapshot['accounts']), 1)
+        self.assertEqual(snapshot['accounts'][0]['pkid'], user.pk)
+        self.assertEqual(snapshot['accounts'][0]['account_username'], 'cube_login_name')
+        self.assertEqual(len(snapshot['accounts'][0]['pilot_data_hash']), 32)
+
+    def test_serialize_snapshot_caches_hash_by_pkid(self):
+        user = _make_member('hash_cache_user')
+        _make_char(user, character_id=777002, character_name='Hash Cache Main')
+
+        snapshot = serialize_pilot_snapshot()
+        account_payload = snapshot['accounts'][0]
+        cache_row = PilotSnapshotHash.objects.get(pkid=user.pk)
+
+        self.assertEqual(cache_row.pilot_data_hash, account_payload['pilot_data_hash'])
 
 
 # ── Model ───────────────────────────────────────────────────────────

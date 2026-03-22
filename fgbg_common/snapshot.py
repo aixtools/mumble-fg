@@ -37,6 +37,36 @@ def _coerce_bool(value: Any, *, field_name: str) -> bool:
     raise ValueError(f'{field_name} must be a boolean')
 
 
+def _pilot_data_hash(
+    *,
+    account_username: str,
+    display_name: str,
+    characters: Iterable['PilotCharacter'],
+) -> str:
+    canonical_characters = [
+        {
+            'character_id': int(character.character_id),
+            'character_name': str(character.character_name or ''),
+            'corporation_id': int(character.corporation_id) if character.corporation_id is not None else None,
+            'corporation_name': str(character.corporation_name or ''),
+            'alliance_id': int(character.alliance_id) if character.alliance_id is not None else None,
+            'alliance_name': str(character.alliance_name or ''),
+            'is_main': bool(character.is_main),
+        }
+        for character in sorted(characters, key=_character_sort_key)
+    ]
+    payload = json.dumps(
+        {
+            'account_username': str(account_username or ''),
+            'display_name': str(display_name or ''),
+            'characters': canonical_characters,
+        },
+        sort_keys=True,
+        separators=(',', ':'),
+    )
+    return hashlib.md5(payload.encode('utf-8')).hexdigest()
+
+
 @dataclass(frozen=True)
 class PilotCharacter:
     character_id: int
@@ -75,21 +105,44 @@ class PilotCharacter:
 class PilotAccount:
     pkid: int
     characters: tuple[PilotCharacter, ...]
+    account_username: str = ''
     display_name: str = ''
+    pilot_data_hash: str = ''
 
     def __post_init__(self):
         if not self.characters:
             raise ValueError('PilotAccount.characters must not be empty')
+        if not self.pilot_data_hash:
+            object.__setattr__(
+                self,
+                'pilot_data_hash',
+                _pilot_data_hash(
+                    account_username=self.account_username,
+                    display_name=self.display_name,
+                    characters=self.characters,
+                ),
+            )
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> 'PilotAccount':
         pkid = _coerce_int(payload.get('pkid', payload.get('user_id')), field_name='pkid')
+        account_username = _coerce_text(
+            payload.get('account_username', payload.get('username', '')),
+            field_name='account_username',
+        )
         display_name = _coerce_text(payload.get('display_name', ''), field_name='display_name')
+        pilot_data_hash = _coerce_text(payload.get('pilot_data_hash', ''), field_name='pilot_data_hash')
         raw_characters = payload.get('characters')
         if not isinstance(raw_characters, (list, tuple)):
             raise ValueError('characters must be a list')
         characters = tuple(_normalize_characters(PilotCharacter.from_mapping(item) for item in raw_characters))
-        return cls(pkid=pkid, display_name=display_name, characters=characters)
+        return cls(
+            pkid=pkid,
+            account_username=account_username,
+            display_name=display_name,
+            pilot_data_hash=pilot_data_hash,
+            characters=characters,
+        )
 
     @property
     def main_character(self) -> PilotCharacter:
@@ -101,7 +154,9 @@ class PilotAccount:
     def as_dict(self) -> dict[str, Any]:
         return {
             'pkid': self.pkid,
+            'account_username': self.account_username,
             'display_name': self.display_name,
+            'pilot_data_hash': self.pilot_data_hash,
             'characters': [character.as_dict() for character in self.characters],
         }
 
@@ -176,12 +231,27 @@ class PilotSnapshot:
             bucket = grouped.setdefault(
                 pkid,
                 {
+                    'account_username': _coerce_text(
+                        row.get('account_username', row.get('username', '')),
+                        field_name='account_username',
+                    ),
                     'display_name': _coerce_text(row.get('display_name', ''), field_name='display_name'),
+                    'pilot_data_hash': _coerce_text(row.get('pilot_data_hash', ''), field_name='pilot_data_hash'),
                     'characters': [],
                 },
             )
+            if not bucket['account_username']:
+                bucket['account_username'] = _coerce_text(
+                    row.get('account_username', row.get('username', '')),
+                    field_name='account_username',
+                )
             if not bucket['display_name']:
                 bucket['display_name'] = _coerce_text(row.get('display_name', ''), field_name='display_name')
+            if not bucket['pilot_data_hash']:
+                bucket['pilot_data_hash'] = _coerce_text(
+                    row.get('pilot_data_hash', ''),
+                    field_name='pilot_data_hash',
+                )
             bucket['characters'].append(
                 PilotCharacter(
                     character_id=_coerce_int(row.get('character_id'), field_name='character_id'),
@@ -196,7 +266,9 @@ class PilotSnapshot:
         accounts = tuple(
             PilotAccount(
                 pkid=pkid,
+                account_username=str(bucket['account_username'] or ''),
                 display_name=str(bucket['display_name'] or ''),
+                pilot_data_hash=str(bucket['pilot_data_hash'] or ''),
                 characters=tuple(_normalize_characters(bucket['characters'])),
             )
             for pkid, bucket in sorted(grouped.items())

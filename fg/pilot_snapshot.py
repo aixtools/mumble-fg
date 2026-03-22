@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.db import connections, router
+from django.db.utils import OperationalError, ProgrammingError
 from django.utils.timezone import now
 
+from fg.models import PilotSnapshotHash
 from fgbg_common.snapshot import PilotSnapshot
+
+logger = logging.getLogger(__name__)
 
 
 class PilotSnapshotError(RuntimeError):
@@ -70,6 +75,7 @@ def build_pilot_snapshot() -> PilotSnapshot:
     accounts = tuple(
         type(account)(
             pkid=account.pkid,
+            account_username=str(users_by_id.get(account.pkid).username) if users_by_id.get(account.pkid) else '',
             display_name=_compute_display_name(users_by_id.get(account.pkid)) if users_by_id.get(account.pkid) else '',
             characters=account.characters,
         )
@@ -78,5 +84,39 @@ def build_pilot_snapshot() -> PilotSnapshot:
     return PilotSnapshot(accounts=accounts, generated_at=snapshot.generated_at)
 
 
+def _cache_snapshot_hashes(snapshot: PilotSnapshot) -> None:
+    accounts = tuple(snapshot.accounts)
+    if not accounts:
+        return
+
+    pkids = [int(account.pkid) for account in accounts]
+    existing = {
+        int(row.pkid): row
+        for row in PilotSnapshotHash.objects.filter(pkid__in=pkids)
+    }
+
+    to_create = []
+    to_update = []
+    for account in accounts:
+        hash_value = str(account.pilot_data_hash or '')
+        row = existing.get(int(account.pkid))
+        if row is None:
+            to_create.append(PilotSnapshotHash(pkid=account.pkid, pilot_data_hash=hash_value))
+            continue
+        if row.pilot_data_hash != hash_value:
+            row.pilot_data_hash = hash_value
+            to_update.append(row)
+
+    if to_create:
+        PilotSnapshotHash.objects.bulk_create(to_create)
+    for row in to_update:
+        row.save(update_fields=['pilot_data_hash', 'updated_at'])
+
+
 def serialize_pilot_snapshot() -> dict[str, Any]:
-    return build_pilot_snapshot().as_dict()
+    snapshot = build_pilot_snapshot()
+    try:
+        _cache_snapshot_hashes(snapshot)
+    except (OperationalError, ProgrammingError):  # migration not applied yet
+        logger.warning('Pilot snapshot hash cache table unavailable; continuing without FG hash persistence.')
+    return snapshot.as_dict()

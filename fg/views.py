@@ -186,9 +186,6 @@ def _build_registration_target(user, server, *, existing=None):
 
 
 def _get_mumble_username(user):
-    main = get_host_adapter().get_main_character(user)
-    if main:
-        return main.character_name.replace(' ', '_')
     return user.username.replace(' ', '_')
 
 
