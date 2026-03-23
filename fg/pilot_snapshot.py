@@ -80,6 +80,35 @@ def _display_name_from_account(
     return char_name
 
 
+def _resolved_snapshot_display_name(
+    account,
+    *,
+    user,
+    alliance_tickers: dict[int, str],
+    corporation_tickers: dict[int, str],
+) -> str:
+    fallback = _display_name_from_account(
+        account,
+        alliance_tickers=alliance_tickers,
+        corporation_tickers=corporation_tickers,
+    )
+    if user is None:
+        return fallback
+
+    from fg.views import _compute_display_name
+
+    computed = str(_compute_display_name(user) or '').strip()
+    if not computed:
+        return fallback
+
+    username = str(getattr(user, 'username', '') or '').strip()
+    if username and computed == username and fallback:
+        # In split-db/mock mode, host profile relations can be incomplete; prefer
+        # snapshot-derived display identity over raw account login fallback.
+        return fallback
+    return computed
+
+
 def _get_eve_character_model():
     try:
         import accounts.models as accounts_models
@@ -166,8 +195,6 @@ def build_pilot_snapshot() -> PilotSnapshot:
         ],
     )
 
-    from fg.views import _compute_display_name
-
     alliance_ids: set[int] = set()
     corporation_ids: set[int] = set()
     for account in snapshot.accounts:
@@ -186,14 +213,11 @@ def build_pilot_snapshot() -> PilotSnapshot:
                 fallback='',
                 pkid=int(account.pkid),
             ),
-            display_name=(
-                _compute_display_name(users_by_id.get(account.pkid))
-                if users_by_id.get(account.pkid)
-                else _display_name_from_account(
-                    account,
-                    alliance_tickers=alliance_tickers,
-                    corporation_tickers=corporation_tickers,
-                )
+            display_name=_resolved_snapshot_display_name(
+                account,
+                user=users_by_id.get(account.pkid),
+                alliance_tickers=alliance_tickers,
+                corporation_tickers=corporation_tickers,
             ),
             characters=account.characters,
         )

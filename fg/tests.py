@@ -280,6 +280,32 @@ class PilotSnapshotExportTest(TestCase):
 
         self.assertEqual(cache_row.pilot_data_hash, account_payload['pilot_data_hash'])
 
+    @patch('fg.views._compute_display_name', return_value='leorises')
+    def test_snapshot_display_name_falls_back_to_snapshot_identity_when_compute_returns_login(self, _mock_compute):
+        user = _make_member('leorises')
+        _make_char(
+            user,
+            character_id=777003,
+            character_name='Snapshot Main',
+            alliance_id=99000001,
+            corporation_id=98000001,
+        )
+        EveAllianceInfo.objects.create(
+            alliance_id=99000001,
+            alliance_name='Alliance One',
+            alliance_ticker='ALLY',
+        )
+        EveCorporationInfo.objects.create(
+            corporation_id=98000001,
+            corporation_name='Corporation One',
+            corporation_ticker='CORP',
+        )
+
+        snapshot = build_pilot_snapshot().as_dict()
+
+        self.assertEqual(len(snapshot['accounts']), 1)
+        self.assertEqual(snapshot['accounts'][0]['display_name'], '[ALLY CORP] Snapshot Main')
+
 
 class PilotSnapshotUserLookupTest(TestCase):
     class _AliasQuery:
