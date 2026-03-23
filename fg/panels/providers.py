@@ -203,6 +203,10 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
 
     @staticmethod
     def _display_name(user, *, account, eligible_pilots: list[dict[str, Any]]) -> tuple[str, bool]:
+        stored = str(getattr(account, 'display_name', '') or '').strip()
+        if stored:
+            return stored, False
+
         try:
             from fg.views import _compute_display_name
 
@@ -211,10 +215,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                 return computed, False
         except Exception:  # noqa: BLE001
             pass
-
-        stored = str(getattr(account, 'display_name', '') or '').strip()
-        if stored:
-            return stored, False
 
         if eligible_pilots:
             return str(eligible_pilots[0].get('character_name') or ''), True
