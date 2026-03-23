@@ -30,7 +30,11 @@ def _get_eve_character_model():
 
 def _get_db_for_eve():
     if 'cube' in connections.databases:
-        return 'cube'
+        try:
+            if 'accounts_evecharacter' in connections['cube'].introspection.table_names():
+                return 'cube'
+        except Exception:
+            pass
     eve_character = _get_eve_character_model()
     if eve_character is None:
         return None
@@ -50,14 +54,11 @@ def build_pilot_snapshot() -> PilotSnapshot:
             .values(
                 'user_id',
                 'character_id',
-                'character_name',
                 'corporation_id',
-                'corporation_name',
                 'alliance_id',
-                'alliance_name',
                 'is_main',
             )
-            .order_by('user_id', '-is_main', 'character_name', 'character_id')
+            .order_by('user_id', '-is_main', 'character_id')
         )
     except Exception as exc:  # noqa: BLE001
         raise PilotSnapshotError(f'Failed to build pilot snapshot: {exc}') from exc

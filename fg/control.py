@@ -433,12 +433,20 @@ class BgControlClient:
             deny = rule.get('deny')
             if not isinstance(deny, bool):
                 raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: deny')
+            acl_admin = rule.get('acl_admin', False)
+            if not isinstance(acl_admin, bool):
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: acl_admin')
+            if acl_admin and entity_type != 'pilot':
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: acl_admin requires pilot entity_type')
+            if acl_admin and deny:
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: denied pilots cannot be acl_admin')
 
             payload_rules.append(
                 {
                     'entity_id': entity_id,
                     'entity_type': entity_type,
                     'deny': deny,
+                    'acl_admin': acl_admin,
                     'note': str(rule.get('note', '') or ''),
                     'created_by': str(rule.get('created_by', '') or ''),
                 }

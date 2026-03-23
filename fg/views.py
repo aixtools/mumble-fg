@@ -755,6 +755,76 @@ def _can_delete_acl(user):
     return _can_view_acl(user) and _has_acl_perm(user, 'delete_accessrule')
 
 
+def _can_manage_acl_admin(user):
+    return _can_view_acl(user) and (
+        _acl_admin_bypass(user)
+        or _has_acl_perm(user, 'manage_acl_admin')
+    )
+
+
+def _can_view_acl_admin_any(user):
+    return _can_view_acl(user) and (
+        _acl_admin_bypass(user)
+        or _has_acl_perm(user, 'view_acl_admin_all')
+        or _has_acl_perm(user, 'view_acl_admin_my_alliance')
+        or _has_acl_perm(user, 'view_acl_admin_my_corp')
+    )
+
+
+def _viewer_org_ids(user) -> tuple[int | None, int | None]:
+    if not getattr(user, 'is_authenticated', False):
+        return None, None
+    main = get_host_adapter().get_main_character(user)
+    if not main:
+        return None, None
+    return (
+        int(main.corporation_id) if getattr(main, 'corporation_id', None) else None,
+        int(main.alliance_id) if getattr(main, 'alliance_id', None) else None,
+    )
+
+
+def _pilot_org_ids(pilot_character_id: int) -> tuple[int | None, int | None]:
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None:
+        return None, None
+
+    row = (
+        EveCharacter.objects.using(db)
+        .filter(character_id=pilot_character_id, pending_delete=False)
+        .values('corporation_id', 'alliance_id')
+        .first()
+    )
+    if not row:
+        return None, None
+    return (
+        int(row['corporation_id']) if row.get('corporation_id') else None,
+        int(row['alliance_id']) if row.get('alliance_id') else None,
+    )
+
+
+def _can_view_acl_admin_for_pilot(user, pilot_character_id: int, *, pilot_org: tuple[int | None, int | None] | None = None) -> bool:
+    if not _can_view_acl_admin_any(user):
+        return False
+    if _acl_admin_bypass(user) or _has_acl_perm(user, 'view_acl_admin_all'):
+        return True
+
+    corp_scope = _has_acl_perm(user, 'view_acl_admin_my_corp')
+    alliance_scope = _has_acl_perm(user, 'view_acl_admin_my_alliance')
+    if not corp_scope and not alliance_scope:
+        return False
+
+    viewer_corp, viewer_alliance = _viewer_org_ids(user)
+    pilot_corp, pilot_alliance = pilot_org or _pilot_org_ids(pilot_character_id)
+    return (
+        bool(corp_scope and viewer_corp and pilot_corp and viewer_corp == pilot_corp)
+        or bool(alliance_scope and viewer_alliance and pilot_alliance and viewer_alliance == pilot_alliance)
+    )
+
+
+def _can_manage_acl_admin_for_pilot(user, pilot_character_id: int, *, pilot_org: tuple[int | None, int | None] | None = None) -> bool:
+    return _can_manage_acl_admin(user) and _can_view_acl_admin_for_pilot(user, pilot_character_id, pilot_org=pilot_org)
+
+
 def _sync_acl_rules_after_change(request, *, source, trigger, rule=None, acl_id=None):
     actor_username = request.user.get_username() or 'system'
     return sync_acl_rules_to_bg(
@@ -813,8 +883,25 @@ def acl_list(request):
         return HttpResponseForbidden()
 
     rules = list(AccessRule.objects.all())
+    pilot_orgs = _pilot_org_map(
+        [int(rule.entity_id) for rule in rules if rule.entity_type == ENTITY_TYPE_PILOT]
+    )
     for rule in rules:
         rule.resolved_name = _resolve_name_for_rule(rule)
+        rule.can_view_acl_admin = False
+        rule.can_manage_acl_admin = False
+        if rule.entity_type == ENTITY_TYPE_PILOT:
+            pilot_org = pilot_orgs.get(int(rule.entity_id))
+            rule.can_view_acl_admin = (not rule.deny) and _can_view_acl_admin_for_pilot(
+                request.user,
+                int(rule.entity_id),
+                pilot_org=pilot_org,
+            )
+            rule.can_manage_acl_admin = (not rule.deny) and _can_manage_acl_admin_for_pilot(
+                request.user,
+                int(rule.entity_id),
+                pilot_org=pilot_org,
+            )
 
     return render(request, 'fg/acl.html', {
         'rules': rules,
@@ -822,6 +909,8 @@ def acl_list(request):
         'can_change_acl': _can_change_acl(request.user),
         'can_delete_acl': _can_delete_acl(request.user),
         'can_sync_acl': _can_change_acl(request.user),
+        'can_view_acl_admin': _can_view_acl_admin_any(request.user),
+        'can_manage_acl_admin': _can_manage_acl_admin(request.user),
         'search_url': reverse('mumble:acl_search'),
         'batch_url': reverse('mumble:acl_batch_create'),
         'eligible_url': reverse('mumble:acl_eligible'),
@@ -875,6 +964,7 @@ def acl_batch_create(request):
             defaults={
                 'entity_type': entity_type,
                 'deny': deny,
+                'acl_admin': False,
                 'note': note,
                 'created_by': created_by,
             },
@@ -1018,6 +1108,59 @@ def _main_character_rows(EveCharacter, db, user_ids):
     for row in queryset:
         mains.setdefault(row['user_id'], row)
     return mains
+
+
+def _pilot_has_denied_corp_or_alliance(pilot_character_id: int) -> bool:
+    """Return True when this pilot account matches any corp/alliance deny rule."""
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None:
+        return False
+
+    pilot_row = (
+        EveCharacter.objects.using(db)
+        .filter(character_id=pilot_character_id, pending_delete=False)
+        .values('user_id')
+        .first()
+    )
+    if not pilot_row:
+        return False
+
+    rs = _acl_rule_sets()
+    denied_corps = rs['denied_corps']
+    denied_alliances = rs['denied_alliances']
+    if not denied_corps and not denied_alliances:
+        return False
+
+    account_rows = (
+        EveCharacter.objects.using(db)
+        .filter(user_id=pilot_row['user_id'], pending_delete=False)
+        .values('corporation_id', 'alliance_id')
+    )
+    for row in account_rows:
+        if row['corporation_id'] in denied_corps:
+            return True
+        if row['alliance_id'] in denied_alliances:
+            return True
+    return False
+
+
+def _pilot_org_map(pilot_character_ids: list[int]) -> dict[int, tuple[int | None, int | None]]:
+    EveCharacter, db = _eve_char_setup()
+    if EveCharacter is None or db is None or not pilot_character_ids:
+        return {}
+    rows = (
+        EveCharacter.objects.using(db)
+        .filter(character_id__in=pilot_character_ids, pending_delete=False)
+        .values('character_id', 'corporation_id', 'alliance_id')
+    )
+    mapped: dict[int, tuple[int | None, int | None]] = {}
+    for row in rows:
+        character_id = int(row['character_id'])
+        mapped[character_id] = (
+            int(row['corporation_id']) if row.get('corporation_id') else None,
+            int(row['alliance_id']) if row.get('alliance_id') else None,
+        )
+    return mapped
 
 
 def _resolved_eve_user_id(user, *, db: str):
@@ -1205,7 +1348,11 @@ def acl_toggle_deny(request, rule_id):
     rule = get_object_or_404(AccessRule, pk=rule_id)
     previous = access_rule_snapshot(rule)
     rule.deny = not rule.deny
-    rule.save(update_fields=['deny', 'updated_at'])
+    if rule.deny:
+        rule.acl_admin = False
+        rule.save(update_fields=['deny', 'acl_admin', 'updated_at'])
+    else:
+        rule.save(update_fields=['deny', 'updated_at'])
     append_access_rule_audit(
         action=ACL_AUDIT_ACTION_UPDATE,
         actor_username=request.user.get_username(),
@@ -1217,6 +1364,53 @@ def acl_toggle_deny(request, rule_id):
         _sync_acl_rules_after_change(
             request,
             source='acl_ui_toggle_deny_sync',
+            trigger='implicit',
+            rule=rule,
+        )
+    except MurmurSyncError as exc:
+        _acl_sync_failure_message(request, exc)
+    return redirect('mumble:acl_list')
+
+
+@require_POST
+@login_required
+def acl_toggle_admin(request, rule_id):
+    if not _can_manage_acl_admin(request.user):
+        return HttpResponseForbidden()
+
+    rule = get_object_or_404(AccessRule, pk=rule_id)
+    if rule.entity_type != ENTITY_TYPE_PILOT:
+        messages.warning(request, _('ACL admin can only be set for pilot rules.'))
+        return redirect('mumble:acl_list')
+    if rule.deny:
+        messages.warning(request, _('Denied pilots cannot be marked as ACL admin.'))
+        return redirect('mumble:acl_list')
+    if not _can_manage_acl_admin_for_pilot(request.user, int(rule.entity_id)):
+        return HttpResponseForbidden()
+
+    previous = access_rule_snapshot(rule)
+    target_admin = not rule.acl_admin
+    if target_admin:
+        if _pilot_has_denied_corp_or_alliance(int(rule.entity_id)):
+            messages.warning(
+                request,
+                _('Pilot cannot be ACL admin while alliance or corporation deny rules apply.'),
+            )
+            return redirect('mumble:acl_list')
+
+    rule.acl_admin = target_admin
+    rule.save(update_fields=['acl_admin', 'updated_at'])
+    append_access_rule_audit(
+        action=ACL_AUDIT_ACTION_UPDATE,
+        actor_username=request.user.get_username(),
+        rule=rule,
+        source='acl_ui_toggle_admin',
+        previous=previous,
+    )
+    try:
+        _sync_acl_rules_after_change(
+            request,
+            source='acl_ui_toggle_admin_sync',
             trigger='implicit',
             rule=rule,
         )

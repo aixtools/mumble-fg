@@ -30,5 +30,6 @@ urlpatterns = [
     path('acl/blocked/', views.acl_blocked, name='acl_blocked'),
     path('acl/sync/', views.acl_sync, name='acl_sync'),
     path('acl/<int:rule_id>/toggle-deny/', views.acl_toggle_deny, name='acl_toggle_deny'),
+    path('acl/<int:rule_id>/toggle-admin/', views.acl_toggle_admin, name='acl_toggle_admin'),
     path('acl/<int:rule_id>/delete/', views.acl_delete, name='acl_delete'),
 ]

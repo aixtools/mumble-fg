@@ -65,6 +65,7 @@
                 <li>{% trans "Alliance: deny=off permits. deny=on blocks any account with a main or alt in that alliance. Unlisted alliances are implicitly denied." %}</li>
                 <li>{% trans "Corporation: deny=on blocks a corp within an allowed alliance." %}</li>
                 <li>{% trans "Pilot: overrides corp and alliance. deny=off rescues a pilot even if their corp or alliance is denied." %}</li>
+                <li>{% trans "Admin: pilot-only marker. A pilot cannot remain admin when alliance or corporation deny rules apply." %}</li>
             </ul>
             <p style="margin: 0 0 8px;">{% trans "Deny checks are account-wide: if main or any alt matches a deny rule, the entire account is denied — unless a pilot-level allow overrides it." %}</p>
             <p style="margin: 0; font-style: italic;">{% trans "Eligible Pilots shows characters matched by current rules. Blocked Pilots shows only those explicitly denied — characters in unlisted alliances are implicitly denied but not listed." %}</p>
@@ -116,6 +117,9 @@
                         <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Name" %}</th>
                         <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Type" %}</th>
                         <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Access" %}</th>
+                        {% if can_view_acl_admin %}
+                        <th style="text-align: center; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Admin" %}</th>
+                        {% endif %}
                         <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Note" %}</th>
                         <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "By" %}</th>
                         <th style="text-align: left; padding: 8px; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">{% trans "Updated" %}</th>
@@ -155,6 +159,30 @@
                                 {% endif %}
                             {% endif %}
                         </td>
+                        {% if can_view_acl_admin %}
+                        <td style="padding: 8px; text-align: center;">
+                            {% if rule.entity_type == 'pilot' and rule.can_view_acl_admin %}
+                                {% if rule.can_manage_acl_admin %}
+                                <form method="post" action="{% url 'mumble:acl_toggle_admin' rule.pk %}" style="display: inline;">
+                                    {% csrf_token %}
+                                    {% if rule.acl_admin %}
+                                        <button type="submit" style="background: rgba(52,152,219,0.2); color: #3498db; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700; border: 1px solid rgba(52,152,219,0.4); cursor: pointer;" title="Click to remove Admin">{% trans "ADMIN" %}</button>
+                                    {% else %}
+                                        <button type="submit" style="background: rgba(149,165,166,0.2); color: #95a5a6; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700; border: 1px solid rgba(149,165,166,0.4); cursor: pointer;" title="Click to mark as Admin" {% if rule.deny %}disabled{% endif %}>{% trans "USER" %}</button>
+                                    {% endif %}
+                                </form>
+                                {% else %}
+                                    {% if rule.acl_admin %}
+                                        <span style="background: rgba(52,152,219,0.2); color: #3498db; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">{% trans "ADMIN" %}</span>
+                                    {% else %}
+                                        <span style="color: var(--text-secondary);">-</span>
+                                    {% endif %}
+                                {% endif %}
+                            {% else %}
+                                <span style="color: var(--text-secondary);">-</span>
+                            {% endif %}
+                        </td>
+                        {% endif %}
                         <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ rule.note }}</td>
                         <td style="padding: 8px; color: var(--text-secondary); font-size: 13px;">{{ rule.created_by }}</td>
                         <td style="padding: 8px; color: var(--text-secondary); font-size: 12px;">{{ rule.updated_at|date:"Y-m-d H:i" }}</td>

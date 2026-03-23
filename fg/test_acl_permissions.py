@@ -42,10 +42,13 @@ def _grant_audit_perm(user, codename):
 
 @override_settings(**_NO_REDIS)
 class ACLPermissionViewTest(TestCase):
+    databases = {'default', 'cube'}
+
     def setUp(self):
         self.factory = RequestFactory()
         self.user = _make_member()
         self.rule = AccessRule.objects.create(entity_id=99013537, entity_type='alliance', note='test')
+        self.pilot_rule = AccessRule.objects.create(entity_id=900001, entity_type='pilot', note='pilot test')
 
     def _login(self):
         self.client.force_login(self.user)
@@ -121,9 +124,12 @@ class ACLPermissionViewTest(TestCase):
         with patch('fg.views._resolve_name_for_rule', return_value='Resolved Name'):
             response = self.client.get(reverse('mumble:acl_list'))
         self.assertNotContains(response, reverse('mumble:acl_toggle_deny', args=[self.rule.pk]))
+        self.assertNotContains(response, reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
         self.assertNotContains(response, reverse('mumble:acl_sync'))
 
         response = self.client.post(reverse('mumble:acl_toggle_deny', args=[self.rule.pk]))
+        self.assertEqual(response.status_code, 403)
+        response = self.client.post(reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
         self.assertEqual(response.status_code, 403)
         response = self.client.post(reverse('mumble:acl_sync'))
         self.assertEqual(response.status_code, 403)
@@ -135,6 +141,7 @@ class ACLPermissionViewTest(TestCase):
         with patch('fg.views._resolve_name_for_rule', return_value='Resolved Name'):
             response = self.client.get(reverse('mumble:acl_list'))
         self.assertContains(response, reverse('mumble:acl_toggle_deny', args=[self.rule.pk]))
+        self.assertNotContains(response, reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
         self.assertContains(response, reverse('mumble:acl_sync'))
         self.assertNotContains(response, reverse('mumble:acl_delete', args=[self.rule.pk]))
 
@@ -144,9 +151,83 @@ class ACLPermissionViewTest(TestCase):
         self.rule.refresh_from_db()
         self.assertTrue(self.rule.deny)
 
+        response = self.client.post(reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
+        self.assertEqual(response.status_code, 403)
+
+        _grant_acl_perm(self.user, 'manage_acl_admin')
+        _grant_acl_perm(self.user, 'view_acl_admin_all')
+        with patch('fg.views._resolve_name_for_rule', return_value='Resolved Name'):
+            response = self.client.get(reverse('mumble:acl_list'))
+        self.assertContains(response, reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
+
+        with patch('fg.views._pilot_has_denied_corp_or_alliance', return_value=False), patch(
+            'fg.views._sync_acl_rules_after_change',
+            return_value={'status': 'completed', 'total': 2},
+        ):
+            response = self.client.post(reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.pilot_rule.refresh_from_db()
+        self.assertTrue(self.pilot_rule.acl_admin)
+
         with patch('fg.views._sync_acl_rules_after_change', return_value={'status': 'completed', 'total': 1}):
             response = self.client.post(reverse('mumble:acl_sync'))
         self.assertEqual(response.status_code, 302)
+
+    def test_toggle_admin_rejected_when_corp_or_alliance_is_denied(self):
+        _grant_acl_perm(self.user, 'view_accessrule')
+        _grant_acl_perm(self.user, 'manage_acl_admin')
+        _grant_acl_perm(self.user, 'view_acl_admin_all')
+        self._login()
+
+        with patch('fg.views._pilot_has_denied_corp_or_alliance', return_value=True), patch(
+            'fg.views._sync_acl_rules_after_change',
+            return_value={'status': 'completed', 'total': 2},
+        ):
+            response = self.client.post(reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.pilot_rule.refresh_from_db()
+        self.assertFalse(self.pilot_rule.acl_admin)
+
+    def test_toggle_deny_clears_acl_admin_flag(self):
+        _grant_acl_perm(self.user, 'view_accessrule')
+        _grant_acl_perm(self.user, 'change_accessrule')
+        self._login()
+        self.pilot_rule.acl_admin = True
+        self.pilot_rule.save(update_fields=['acl_admin'])
+
+        with patch('fg.views._sync_acl_rules_after_change', return_value={'status': 'completed', 'total': 2}):
+            response = self.client.post(reverse('mumble:acl_toggle_deny', args=[self.pilot_rule.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.pilot_rule.refresh_from_db()
+        self.assertTrue(self.pilot_rule.deny)
+        self.assertFalse(self.pilot_rule.acl_admin)
+
+    def test_toggle_admin_scope_allows_only_matching_corp_or_alliance(self):
+        _grant_acl_perm(self.user, 'view_accessrule')
+        _grant_acl_perm(self.user, 'manage_acl_admin')
+        _grant_acl_perm(self.user, 'view_acl_admin_my_corp')
+        self._login()
+
+        with patch('fg.views._viewer_org_ids', return_value=(980001, 990001)), patch(
+            'fg.views._pilot_org_ids',
+            return_value=(980001, 990099),
+        ), patch('fg.views._pilot_has_denied_corp_or_alliance', return_value=False), patch(
+            'fg.views._sync_acl_rules_after_change',
+            return_value={'status': 'completed', 'total': 2},
+        ):
+            response = self.client.post(reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.pilot_rule.refresh_from_db()
+        self.assertTrue(self.pilot_rule.acl_admin)
+
+        self.pilot_rule.acl_admin = False
+        self.pilot_rule.save(update_fields=['acl_admin'])
+        with patch('fg.views._viewer_org_ids', return_value=(980001, 990001)), patch(
+            'fg.views._pilot_org_ids',
+            return_value=(980999, 990999),
+        ):
+            response = self.client.post(reverse('mumble:acl_toggle_admin', args=[self.pilot_rule.pk]))
+        self.assertEqual(response.status_code, 403)
 
     def test_delete_permission_controls_delete_button_and_endpoint(self):
         _grant_acl_perm(self.user, 'view_accessrule')

@@ -32,6 +32,12 @@
                     {% endif %}
                 </span>
             </div>
+            {% if panel.is_admin %}
+            <div class="info-item">
+                <span class="info-label">{% trans "IsAdmin" %}</span>
+                <span class="info-value">Yes</span>
+            </div>
+            {% endif %}
             <div class="info-item">
                 <span class="info-label">{% trans "Address" %}</span>
                 <span class="info-value" style="user-select: all;">

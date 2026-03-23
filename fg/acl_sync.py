@@ -16,6 +16,7 @@ def serialize_acl_rule(rule: AccessRule) -> dict[str, Any]:
         'entity_id': int(rule.entity_id),
         'entity_type': str(rule.entity_type),
         'deny': bool(rule.deny),
+        'acl_admin': bool(rule.acl_admin),
         'note': str(rule.note or ''),
         'created_by': str(rule.created_by or ''),
     }

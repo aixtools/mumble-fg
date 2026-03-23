@@ -30,6 +30,7 @@ class MurmurPanelDescriptor:
     server_hint: str
     server_address: str
     server_port: str
+    is_admin: bool
     eligible_pilots: tuple[dict[str, Any], ...]
     show_pilot_selector: bool
     password_reset_url: str
@@ -50,6 +51,7 @@ class MurmurPanelDescriptor:
             'server_hint': self.server_hint,
             'server_address': self.server_address,
             'server_port': self.server_port,
+            'is_admin': self.is_admin,
             'eligible_pilots': list(self.eligible_pilots),
             'show_pilot_selector': self.show_pilot_selector,
             'password_reset_url': self.password_reset_url,
@@ -174,6 +176,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             server_hint=self._server_hint(server) if server is not None else 'Profile password panel',
             server_address=server_address,
             server_port=server_port,
+            is_admin=bool(getattr(account, 'is_mumble_admin', False)),
             eligible_pilots=tuple(eligible_pilots),
             show_pilot_selector=len(eligible_pilots) > 1,
             password_reset_url=reverse('mumble:profile_reset_password'),

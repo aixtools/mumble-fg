@@ -12,7 +12,10 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.models import EveAllianceInfo, EveCharacter, EveCorporationInfo, Group, GroupMembership, UserProfile
+try:
+    from accounts.models import EveAllianceInfo, EveCharacter, EveCorporationInfo, Group, GroupMembership, UserProfile
+except ImportError as exc:  # pragma: no cover - environment-specific host model availability
+    raise unittest.SkipTest(f'Host model set unavailable for fg.tests in this environment: {exc}') from exc
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
@@ -498,7 +501,16 @@ class AccessRuleSyncClientTest(TestCase):
         mock_post_json.return_value = {'status': 'completed', 'total': 1}
 
         response = self.control_client.sync_access_rules(
-            [{'entity_id': 99000001, 'entity_type': 'pilot', 'deny': True, 'note': 'seed', 'created_by': 'tester'}],
+            [
+                {
+                    'entity_id': 99000001,
+                    'entity_type': 'pilot',
+                    'deny': False,
+                    'acl_admin': True,
+                    'note': 'seed',
+                    'created_by': 'tester',
+                }
+            ],
             requested_by='test-user',
             is_super=False,
         )
@@ -510,6 +522,15 @@ class AccessRuleSyncClientTest(TestCase):
         self.assertFalse(payload['is_super'])
         self.assertEqual(payload['rules'][0]['entity_id'], 99000001)
         self.assertEqual(payload['rules'][0]['entity_type'], 'pilot')
+        self.assertTrue(payload['rules'][0]['acl_admin'])
+
+    def test_sync_access_rules_rejects_acl_admin_for_non_pilot(self):
+        with self.assertRaises(MurmurSyncError):
+            self.control_client.sync_access_rules(
+                [{'entity_id': 98000001, 'entity_type': 'corporation', 'deny': False, 'acl_admin': True}],
+                requested_by='test-user',
+                is_super=True,
+            )
 
     @patch('fg.control._post_json')
     def test_sync_access_rules_with_reconcile_posts_provision_payload(self, mock_post_json):
@@ -1334,6 +1355,21 @@ class ProfilePanelProviderTest(TestCase):
         usernames = sorted(panel['username_with_slot'] for panel in panels if panel['username_with_slot'])
 
         self.assertEqual(usernames, ['Pilot_Name:1', 'Pilot_Name:2'])
+
+    def test_panel_marks_admin_flag_when_registration_is_admin(self):
+        MumbleUser.objects.create(
+            user=self.user,
+            server=self.server1,
+            username='Panel_Main',
+            pwhash='h',
+            is_mumble_admin=True,
+        )
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
+        self.assertTrue(panel['is_admin'])
 
     def test_panel_prefers_computed_display_name(self):
         EveAllianceInfo.objects.create(
