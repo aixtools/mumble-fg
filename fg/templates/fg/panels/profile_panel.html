@@ -1,6 +1,10 @@
 {% load i18n %}
 
-<div class="settings-card full-width mumble-profile-panel" data-panel-id="{{ panel.key }}">
+<div
+    class="settings-card full-width mumble-profile-panel"
+    data-panel-id="{{ panel.key }}"
+    data-server-label="{{ panel.server_label }}"
+>
     <div class="card-header" style="background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%); border-bottom: 2px solid var(--primary-color);">
         <h2 class="card-title" style="color: var(--primary-color); text-transform: uppercase; letter-spacing: 1px;" title="{{ panel.server_hint }}">{{ panel.server_label }}</h2>
     </div>
@@ -254,5 +258,68 @@
             });
         });
     });
+
+    const allPanels = Array.from(document.querySelectorAll('.mumble-profile-panel'));
+    if (allPanels.length > 1) {
+        const options = allPanels.map(function(panel, index) {
+            return {
+                index: index,
+                label: panel.dataset.serverLabel || ('Server ' + (index + 1)),
+            };
+        });
+
+        function setActivePanel(targetIndex) {
+            const safeIndex = Math.max(0, Math.min(targetIndex, allPanels.length - 1));
+            allPanels.forEach(function(panel, index) {
+                panel.style.display = index === safeIndex ? '' : 'none';
+            });
+            document.querySelectorAll('.mumble-server-selector').forEach(function(selector) {
+                selector.value = String(safeIndex);
+            });
+        }
+
+        allPanels.forEach(function(panel) {
+            const header = panel.querySelector('.card-header');
+            if (!header) {
+                return;
+            }
+            if (header.querySelector('.mumble-server-selector')) {
+                return;
+            }
+
+            const wrapper = document.createElement('div');
+            wrapper.style.marginTop = '0.4rem';
+
+            const label = document.createElement('label');
+            label.textContent = 'Server';
+            label.style.display = 'block';
+            label.style.fontSize = '0.75rem';
+            label.style.marginBottom = '0.15rem';
+            label.style.color = 'var(--text-secondary)';
+
+            const selector = document.createElement('select');
+            selector.className = 'mumble-server-selector';
+            selector.style.padding = '0.3rem 0.45rem';
+            selector.style.background = 'var(--darker-bg)';
+            selector.style.border = '1px solid var(--border-color)';
+            selector.style.borderRadius = '4px';
+            selector.style.color = 'var(--text-color)';
+            options.forEach(function(option) {
+                const node = document.createElement('option');
+                node.value = String(option.index);
+                node.textContent = option.label;
+                selector.appendChild(node);
+            });
+            selector.addEventListener('change', function() {
+                setActivePanel(parseInt(selector.value, 10) || 0);
+            });
+
+            wrapper.appendChild(label);
+            wrapper.appendChild(selector);
+            header.appendChild(wrapper);
+        });
+
+        setActivePanel(0);
+    }
 })();
 </script>

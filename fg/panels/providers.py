@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from django.urls import reverse
 
@@ -75,6 +76,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     """Default profile panel provider usable by any host."""
 
     provider_name = 'generic'
+    default_server_port = '64738'
 
     @staticmethod
     def _eligible_pilots(user) -> list[dict[str, Any]]:
@@ -127,19 +129,35 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     def _server_address_port(server) -> tuple[str, str]:
         if server is None:
             return '', ''
-        address = str(getattr(server, 'address', '') or '').strip()
-        if not address:
+        raw_address = str(getattr(server, 'address', '') or '').strip()
+        if not raw_address:
             return '', ''
-        if address.startswith('[') and ']:' in address:
-            # IPv6 form: [addr]:port
-            end = address.find(']')
-            host = address[1:end]
-            port = address[end + 2 :]
-            return host, str(port or '').strip()
-        if ':' in address:
-            host, port = address.rsplit(':', 1)
-            return str(host).strip(), str(port).strip()
-        return address, ''
+        address = raw_address
+        port = ''
+
+        if '://' in raw_address:
+            parsed = urlparse(raw_address)
+            host = str(parsed.hostname or '').strip()
+            if host:
+                address = host
+            if parsed.port:
+                port = str(parsed.port)
+
+        if not port and address.startswith('['):
+            if ']:' in address:
+                end = address.find(']')
+                host = address[1:end]
+                parsed_port = address[end + 2 :].strip()
+                return host, parsed_port or GenericProfilePanelProvider.default_server_port
+            if address.endswith(']'):
+                return address[1:-1].strip(), GenericProfilePanelProvider.default_server_port
+
+        if not port and ':' in address and address.count(':') == 1:
+            host, parsed_port = address.rsplit(':', 1)
+            if parsed_port.isdigit():
+                return str(host).strip(), parsed_port
+
+        return address, port or GenericProfilePanelProvider.default_server_port
 
     def _panel_descriptor(
         self,

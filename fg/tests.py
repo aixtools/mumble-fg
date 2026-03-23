@@ -19,7 +19,7 @@ except ImportError as exc:  # pragma: no cover - environment-specific host model
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
-from fg.pilot_snapshot import build_pilot_snapshot, serialize_pilot_snapshot
+from fg.pilot_snapshot import _canonical_account_username, build_pilot_snapshot, serialize_pilot_snapshot
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
 from fg.models import (
@@ -249,6 +249,12 @@ class ComputeDisplayNameTest(TestCase):
 
 
 class PilotSnapshotExportTest(TestCase):
+    def test_snapshot_username_canonicalization(self):
+        self.assertEqual(_canonical_account_username('Leo Rises'), 'leorises')
+        self.assertEqual(_canonical_account_username('cube_login_name'), 'cube_login_name')
+        self.assertEqual(_canonical_account_username('', fallback='Pilot One'), 'pilotone')
+        self.assertEqual(_canonical_account_username('', fallback='', pkid=42), 'pkid_42')
+
     def test_snapshot_includes_account_username(self):
         user = _make_member('cube_login_name')
         _make_char(user, character_id=777001, character_name='Snapshot Main')
@@ -1345,6 +1351,16 @@ class ProfilePanelProviderTest(TestCase):
         self.assertEqual(len(panels), 2)
         self.assertEqual({panel['server'].pk for panel in panels}, {self.server1.pk, self.server2.pk})
         self.assertEqual({panel['template'] for panel in panels}, {'fg/panels/profile_panel.html'})
+
+    def test_profile_panel_defaults_port_when_server_address_has_no_port(self):
+        server_without_port = _make_server(name='Server No Port', address='voice-dev.aixtools.com')
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == server_without_port.pk)
+        self.assertEqual(panel['server_address'], 'voice-dev.aixtools.com')
+        self.assertEqual(panel['server_port'], '64738')
 
     def test_duplicate_username_gets_slot_suffix(self):
         MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')

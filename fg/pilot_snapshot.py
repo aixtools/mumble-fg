@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from django.contrib.auth import get_user_model
@@ -18,6 +19,65 @@ logger = logging.getLogger(__name__)
 
 class PilotSnapshotError(RuntimeError):
     """Raised when FG cannot build the pilot snapshot payload."""
+
+
+_USERNAME_SANITIZE_RE = re.compile(r'[^a-z0-9_]+')
+
+
+def _canonical_account_username(raw: str, *, fallback: str = '', pkid: int | None = None) -> str:
+    candidate = str(raw or '').strip().lower()
+    if not candidate:
+        candidate = str(fallback or '').strip().lower()
+    candidate = _USERNAME_SANITIZE_RE.sub('', candidate.replace(' ', ''))
+    if candidate:
+        return candidate
+    if pkid is not None:
+        return f'pkid_{int(pkid)}'
+    return ''
+
+
+def _ticker_maps(alliance_ids: set[int], corporation_ids: set[int]) -> tuple[dict[int, str], dict[int, str]]:
+    try:
+        import accounts.models as accounts_models
+    except ImportError:
+        return {}, {}
+
+    alliance_model = getattr(accounts_models, 'EveAllianceInfo', None)
+    corporation_model = getattr(accounts_models, 'EveCorporationInfo', None)
+    alliance_tickers: dict[int, str] = {}
+    corporation_tickers: dict[int, str] = {}
+
+    if alliance_model is not None and alliance_ids:
+        for row in alliance_model.objects.filter(alliance_id__in=alliance_ids).values('alliance_id', 'alliance_ticker'):
+            ticker = str(row.get('alliance_ticker') or '').strip()
+            if ticker:
+                alliance_tickers[int(row['alliance_id'])] = ticker
+
+    if corporation_model is not None and corporation_ids:
+        for row in corporation_model.objects.filter(corporation_id__in=corporation_ids).values('corporation_id', 'corporation_ticker'):
+            ticker = str(row.get('corporation_ticker') or '').strip()
+            if ticker:
+                corporation_tickers[int(row['corporation_id'])] = ticker
+
+    return alliance_tickers, corporation_tickers
+
+
+def _display_name_from_account(
+    account,
+    *,
+    alliance_tickers: dict[int, str],
+    corporation_tickers: dict[int, str],
+) -> str:
+    main = account.main_character
+    char_name = str(main.character_name or '').strip() or f'pkid_{int(account.pkid)}'
+    tags: list[str] = []
+    if main.alliance_id:
+        tags.append(alliance_tickers.get(int(main.alliance_id), '????'))
+    if main.corporation_id:
+        tags.append(corporation_tickers.get(int(main.corporation_id), '????'))
+    if tags:
+        return f'[{" ".join(tags)}] {char_name}'
+    return char_name
 
 
 def _get_eve_character_model():
@@ -54,8 +114,11 @@ def build_pilot_snapshot() -> PilotSnapshot:
             .values(
                 'user_id',
                 'character_id',
+                'character_name',
                 'corporation_id',
+                'corporation_name',
                 'alliance_id',
+                'alliance_name',
                 'is_main',
             )
             .order_by('user_id', '-is_main', 'character_id')
@@ -73,11 +136,33 @@ def build_pilot_snapshot() -> PilotSnapshot:
 
     from fg.views import _compute_display_name
 
+    alliance_ids: set[int] = set()
+    corporation_ids: set[int] = set()
+    for account in snapshot.accounts:
+        main = account.main_character
+        if main.alliance_id is not None:
+            alliance_ids.add(int(main.alliance_id))
+        if main.corporation_id is not None:
+            corporation_ids.add(int(main.corporation_id))
+    alliance_tickers, corporation_tickers = _ticker_maps(alliance_ids, corporation_ids)
+
     accounts = tuple(
         type(account)(
             pkid=account.pkid,
-            account_username=str(users_by_id.get(account.pkid).username) if users_by_id.get(account.pkid) else '',
-            display_name=_compute_display_name(users_by_id.get(account.pkid)) if users_by_id.get(account.pkid) else '',
+            account_username=_canonical_account_username(
+                str(users_by_id.get(account.pkid).username) if users_by_id.get(account.pkid) else '',
+                fallback=str(account.main_character.character_name or ''),
+                pkid=int(account.pkid),
+            ),
+            display_name=(
+                _compute_display_name(users_by_id.get(account.pkid))
+                if users_by_id.get(account.pkid)
+                else _display_name_from_account(
+                    account,
+                    alliance_tickers=alliance_tickers,
+                    corporation_tickers=corporation_tickers,
+                )
+            ),
             characters=account.characters,
         )
         for account in snapshot.accounts
