@@ -19,7 +19,13 @@ def get_profile_panels(request):
 
 
 def get_periodic_tasks():
-    from celery.schedules import crontab
+    try:
+        from celery.schedules import crontab
+    except ImportError:
+        # Mock hosts such as mockcube may not install Celery. Keep the extension
+        # discoverable anyway so host-context tests can exercise the FG package.
+        def crontab(**kwargs):
+            return {'type': 'crontab', **kwargs}
 
     return {
         'mumble_fg.periodic_acl_sync': {

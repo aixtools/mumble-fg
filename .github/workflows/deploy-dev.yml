@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy_target_name:
-        description: 'Secret name containing deploy target JSON'
+        description: 'Host-user label naming the deploy target secret (for example CUBE_DEV_CUBE)'
         required: false
         default: 'CUBE_DEV_CUBE'
 
@@ -91,6 +91,8 @@ jobs:
           key = payload.get("key", "")
           home_dir = str(payload.get("home_dir", "")).strip()
           project_dir = str(payload.get("project_dir", "")).strip()
+          env_file = str(payload.get("env_file", "")).strip()
+          bg_env_file = str(payload.get("bg_env_file", "")).strip()
           service_units = payload.get("service_units", [])
 
           if not host:
@@ -119,6 +121,8 @@ jobs:
               fh.write(f"DEPLOY_TARGET_USER={user}\n")
               fh.write(f"DEPLOY_HOME_DIR={home_dir}\n")
               fh.write(f"DEPLOY_PROJECT_DIR={project_dir}\n")
+              fh.write(f"DEPLOY_ENV_FILE={env_file}\n")
+              fh.write(f"DEPLOY_BG_ENV_FILE={bg_env_file}\n")
               fh.write(f"DEPLOY_SERVICE_UNITS_CSV={','.join(service_units)}\n")
           PY
 
@@ -139,6 +143,83 @@ jobs:
             --exclude '.venv/' \
             -e "ssh -i ~/.ssh/deploy_key" \
             ./ "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}:${DEPLOY_PROJECT_DIR%/}/"
+
+      - name: Sync FGBG_PSK into FG env (optional)
+        env:
+          FGBG_PSK_SECRET: ${{ secrets.FGBG_PSK || secrets.MURMUR_CONTROL_PSK }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_ENV_FILE:-}" ]; then
+            echo "No env_file configured in deploy target; skipping FGBG_PSK sync."
+            exit 0
+          fi
+
+          FGBG_PSK_SECRET_B64="$(printf '%s' "${FGBG_PSK_SECRET:-}" | base64 | tr -d '\n')"
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "DEPLOY_ENV_FILE='${DEPLOY_ENV_FILE}' DEPLOY_BG_ENV_FILE='${DEPLOY_BG_ENV_FILE}' FGBG_PSK_SECRET_B64='${FGBG_PSK_SECRET_B64}' bash -s" <<'EOF'
+          set -euo pipefail
+          mkdir -p "$(dirname "${DEPLOY_ENV_FILE}")"
+
+          if [ -n "${FGBG_PSK_SECRET_B64:-}" ]; then
+            FGBG_PSK="$(printf '%s' "${FGBG_PSK_SECRET_B64}" | base64 -d)"
+            FGBG_PSK_SOURCE="GitHub secret"
+          else
+            if [ -z "${DEPLOY_BG_ENV_FILE:-}" ]; then
+              echo "No shared FGBG_PSK secret and no bg_env_file configured; skipping FGBG_PSK sync."
+              exit 0
+            fi
+            if [ ! -f "${DEPLOY_BG_ENV_FILE}" ]; then
+              echo "Configured bg_env_file not found: ${DEPLOY_BG_ENV_FILE}" >&2
+              exit 1
+            fi
+            set -a
+            # shellcheck disable=SC1090
+            source "${DEPLOY_BG_ENV_FILE}"
+            set +a
+            FGBG_PSK="${FGBG_PSK:-${MURMUR_CONTROL_PSK:-}}"
+            if [ -z "${FGBG_PSK}" ]; then
+              echo "BG env file ${DEPLOY_BG_ENV_FILE} does not define FGBG_PSK or legacy MURMUR_CONTROL_PSK." >&2
+              exit 1
+            fi
+            export FGBG_PSK
+            FGBG_PSK_SOURCE="${DEPLOY_BG_ENV_FILE}"
+          fi
+
+          export FGBG_PSK FGBG_PSK_SOURCE
+          python3 - <<'PY'
+          import os
+          import shlex
+          from pathlib import Path
+
+          env_path = Path(os.environ["DEPLOY_ENV_FILE"])
+          line = f"FGBG_PSK={shlex.quote(os.environ['FGBG_PSK'])}"
+          source = os.environ.get("FGBG_PSK_SOURCE", "unknown")
+
+          if env_path.exists():
+              lines = env_path.read_text(encoding="utf-8").splitlines()
+          else:
+              lines = []
+
+          filtered = []
+          replaced = False
+          for existing in lines:
+              if existing.startswith("FGBG_PSK=") or existing.startswith("MURMUR_CONTROL_PSK="):
+                  if not replaced:
+                      filtered.append(line)
+                      replaced = True
+                  continue
+              filtered.append(existing)
+
+          if not replaced:
+              if filtered and filtered[-1] != "":
+                  filtered.append("")
+              filtered.append(f"# Synced by mumble-fg deploy workflow from {source}")
+              filtered.append(line)
+
+          env_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+          env_path.chmod(0o600)
+          PY
+          EOF
 
       - name: Restart host services (best effort)
         run: |

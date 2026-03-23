@@ -8,6 +8,7 @@ from typing import Any, NamedTuple
 from django.apps import apps
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 _DEFAULT_MODEL_APP_LABEL = 'mumble'
 
@@ -138,6 +139,10 @@ class AccessRule(models.Model):
         default=False,
         help_text='Off = permit (default). On = deny access.',
     )
+    acl_admin = models.BooleanField(
+        default=False,
+        help_text='Pilot-only Murmur admin marker. Ignored for alliance/corporation rules.',
+    )
     note = models.TextField(
         blank=True,
         default='',
@@ -157,10 +162,29 @@ class AccessRule(models.Model):
         ordering = ['entity_type', 'entity_id']
         verbose_name = 'access control entry'
         verbose_name_plural = 'access control list'
+        permissions = [
+            ('manage_acl_admin', 'Can set or clear ACL pilot admin markers'),
+            ('view_acl_admin_my_corp', 'Can view ACL pilot admin markers in own corporation'),
+            ('view_acl_admin_my_alliance', 'Can view ACL pilot admin markers in own alliance'),
+            ('view_acl_admin_all', 'Can view ACL pilot admin markers for all pilots'),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=Q(acl_admin=False) | Q(entity_type=ENTITY_TYPE_PILOT),
+                name='fg_access_rule_acl_admin_pilot_only',
+            ),
+        ]
 
     def __str__(self):
         action = 'DENY' if self.deny else 'ALLOW'
         return f'{action} {self.entity_type} {self.entity_id}'
+
+    def save(self, *args, **kwargs):
+        if self.entity_type != ENTITY_TYPE_PILOT:
+            self.acl_admin = False
+        if self.deny:
+            self.acl_admin = False
+        return super().save(*args, **kwargs)
 
 
 def access_rule_snapshot(rule: AccessRule | None) -> dict[str, Any]:
@@ -170,6 +194,7 @@ def access_rule_snapshot(rule: AccessRule | None) -> dict[str, Any]:
         'entity_id': rule.entity_id,
         'entity_type': rule.entity_type,
         'deny': rule.deny,
+        'acl_admin': rule.acl_admin,
         'note': rule.note,
         'created_by': rule.created_by,
     }
@@ -253,6 +278,33 @@ class AccessRuleAudit(models.Model):
         return f'{self.action.upper()} {self.source or "acl"}'
 
 
+class PilotSnapshotHash(models.Model):
+    """FG-side cache of per-account pilot snapshot hashes sent to BG."""
+
+    pkid = models.BigIntegerField(
+        unique=True,
+        help_text='Stable FG/BG account identity key.',
+    )
+    pilot_data_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        db_index=True,
+        help_text='Hash of pilot snapshot payload for this account (md5 placeholder).',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_pilot_snapshot_hash'
+        ordering = ['pkid']
+        verbose_name = 'pilot snapshot hash'
+        verbose_name_plural = 'pilot snapshot hashes'
+
+    def __str__(self):
+        return f'{self.pkid}:{self.pilot_data_hash}'
+
+
 def append_access_rule_audit(
     *,
     action: str,
@@ -310,6 +362,7 @@ __all__ = [
     'MumbleUser',
     'MurmurModelLookupError',
     'MurmurModelResolver',
+    'PilotSnapshotHash',
     'ResolvedMurmurModels',
     'access_rule_snapshot',
     'append_access_rule_audit',

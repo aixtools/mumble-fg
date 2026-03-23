@@ -12,10 +12,19 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.models import EveCharacter, Group, GroupMembership, UserProfile
+try:
+    from accounts.models import EveAllianceInfo, EveCharacter, EveCorporationInfo, Group, GroupMembership, UserProfile
+except ImportError as exc:  # pragma: no cover - environment-specific host model availability
+    raise unittest.SkipTest(f'Host model set unavailable for fg.tests in this environment: {exc}') from exc
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
+from fg.pilot_snapshot import (
+    _canonical_account_username,
+    _load_users_by_id,
+    build_pilot_snapshot,
+    serialize_pilot_snapshot,
+)
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
 from fg.models import (
@@ -24,12 +33,14 @@ from fg.models import (
     ENTITY_TYPE_PILOT,
     MumbleUser,
     MurmurModelLookupError,
+    PilotSnapshotHash,
 )
 from fg.runtime import BgRuntimeService, RuntimeRegistration, RuntimeServer
 from fg.views import (
     _get_mumble_username,
     _compute_display_name,
     _compute_groups,
+    _password_has_supported_chars,
     profile_password_pilot_choices,
 )
 
@@ -144,13 +155,15 @@ class GetMumbleUsernameTest(TestCase):
 
     def test_with_main_character(self):
         _make_char(self.user)
-        self.assertEqual(_get_mumble_username(self.user), 'Test_Pilot')
+        self.assertEqual(_get_mumble_username(self.user), 'testuser')
 
     def test_without_main_character(self):
         self.assertEqual(_get_mumble_username(self.user), 'testuser')
 
     def test_spaces_replaced(self):
-        _make_char(self.user, character_id=99999, character_name='A B C')
+        self.user.username = 'A B C'
+        self.user.save(update_fields=['username'])
+        _make_char(self.user, character_id=99999, character_name='Ignored Character')
         self.assertEqual(_get_mumble_username(self.user), 'A_B_C')
 
 
@@ -199,47 +212,170 @@ class ComputeDisplayNameTest(TestCase):
     def setUp(self):
         self.user = User.objects.create_user('testuser', password='pass')
 
-    def _mock_ticker(self, alliance_ticker=None, corp_ticker=None):
-        """Return a side_effect function for _get_ticker that returns controlled values."""
-        def side_effect(endpoint, label):
-            if 'alliances' in endpoint and alliance_ticker is not None:
-                return alliance_ticker
-            if 'corporations' in endpoint and corp_ticker is not None:
-                return corp_ticker
-            return ''
-        return side_effect
+    def _cache_orgs(self, *, alliance_id=None, alliance_ticker='', corporation_id=None, corp_ticker=''):
+        if alliance_id:
+            EveAllianceInfo.objects.create(
+                alliance_id=alliance_id,
+                alliance_name='Alliance',
+                alliance_ticker=alliance_ticker,
+            )
+        if corporation_id:
+            EveCorporationInfo.objects.create(
+                corporation_id=corporation_id,
+                corporation_name='Corporation',
+                corporation_ticker=corp_ticker,
+            )
 
-    @patch('fg.views._get_ticker')
-    def test_alliance_and_corp_tickers(self, mock_get_ticker):
+    def test_alliance_and_corp_tickers(self):
         _make_char(self.user, alliance_id=99000001, corporation_id=98000001)
-        mock_get_ticker.side_effect = self._mock_ticker('ALLY', 'CORP')
+        self._cache_orgs(alliance_id=99000001, alliance_ticker='ALLY', corporation_id=98000001, corp_ticker='CORP')
         result = _compute_display_name(self.user)
         self.assertEqual(result, '[ALLY CORP] Test Pilot')
 
-    @patch('fg.views._get_ticker')
-    def test_alliance_only(self, mock_get_ticker):
+    def test_alliance_only(self):
         _make_char(self.user, alliance_id=99000001, corporation_id=98000001)
-        mock_get_ticker.side_effect = self._mock_ticker('ALLY', '')
+        self._cache_orgs(alliance_id=99000001, alliance_ticker='ALLY')
         result = _compute_display_name(self.user)
-        self.assertEqual(result, '[ALLY] Test Pilot')
+        self.assertEqual(result, '[ALLY ????] Test Pilot')
 
-    @patch('fg.views._get_ticker')
-    def test_corp_only(self, mock_get_ticker):
+    def test_corp_only(self):
         _make_char(self.user, corporation_id=98000001)
-        mock_get_ticker.side_effect = self._mock_ticker(None, 'CORP')
+        self._cache_orgs(corporation_id=98000001, corp_ticker='CORP')
         result = _compute_display_name(self.user)
         self.assertEqual(result, '[CORP] Test Pilot')
 
-    @patch('fg.views._get_ticker')
-    def test_no_tickers(self, mock_get_ticker):
+    def test_unknown_tickers_use_placeholder(self):
         _make_char(self.user, alliance_id=99000001, corporation_id=98000001)
-        mock_get_ticker.side_effect = self._mock_ticker('', '')
         result = _compute_display_name(self.user)
-        self.assertEqual(result, 'Test Pilot')
+        self.assertEqual(result, '[???? ????] Test Pilot')
 
     def test_no_main_character(self):
         result = _compute_display_name(self.user)
         self.assertEqual(result, 'testuser')
+
+
+class PasswordPolicyTest(TestCase):
+    def test_space_is_rejected(self):
+        self.assertFalse(_password_has_supported_chars('abc def123'))
+
+    def test_printable_ascii_without_space_is_allowed(self):
+        self.assertTrue(_password_has_supported_chars('Abcd1234!@#$%^&*()-_=+[]{}'))
+
+
+class PilotSnapshotExportTest(TestCase):
+    def test_snapshot_username_canonicalization(self):
+        self.assertEqual(_canonical_account_username('Leo Rises'), 'leorises')
+        self.assertEqual(_canonical_account_username('cube_login_name'), 'cube_login_name')
+        self.assertEqual(_canonical_account_username('', fallback=''), '')
+        self.assertEqual(_canonical_account_username('', fallback='', pkid=42), 'pkid_42')
+
+    def test_snapshot_includes_account_username(self):
+        user = _make_member('cube_login_name')
+        _make_char(user, character_id=777001, character_name='Snapshot Main')
+
+        snapshot = build_pilot_snapshot().as_dict()
+        self.assertEqual(len(snapshot['accounts']), 1)
+        self.assertEqual(snapshot['accounts'][0]['pkid'], user.pk)
+        self.assertEqual(snapshot['accounts'][0]['account_username'], 'cube_login_name')
+        self.assertEqual(len(snapshot['accounts'][0]['pilot_data_hash']), 32)
+
+    def test_serialize_snapshot_caches_hash_by_pkid(self):
+        user = _make_member('hash_cache_user')
+        _make_char(user, character_id=777002, character_name='Hash Cache Main')
+
+        snapshot = serialize_pilot_snapshot()
+        account_payload = snapshot['accounts'][0]
+        cache_row = PilotSnapshotHash.objects.get(pkid=user.pk)
+
+        self.assertEqual(cache_row.pilot_data_hash, account_payload['pilot_data_hash'])
+
+    @patch('fg.views._compute_display_name', return_value='leorises')
+    def test_snapshot_display_name_falls_back_to_snapshot_identity_when_compute_returns_login(self, _mock_compute):
+        user = _make_member('leorises')
+        _make_char(
+            user,
+            character_id=777003,
+            character_name='Snapshot Main',
+            alliance_id=99000001,
+            corporation_id=98000001,
+        )
+        EveAllianceInfo.objects.create(
+            alliance_id=99000001,
+            alliance_name='Alliance One',
+            alliance_ticker='ALLY',
+        )
+        EveCorporationInfo.objects.create(
+            corporation_id=98000001,
+            corporation_name='Corporation One',
+            corporation_ticker='CORP',
+        )
+
+        snapshot = build_pilot_snapshot().as_dict()
+
+        self.assertEqual(len(snapshot['accounts']), 1)
+        self.assertEqual(snapshot['accounts'][0]['display_name'], '[ALLY CORP] Snapshot Main')
+
+
+class PilotSnapshotUserLookupTest(TestCase):
+    class _AliasQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, **kwargs):
+            ids = {int(value) for value in kwargs.get('id__in', [])}
+            return PilotSnapshotUserLookupTest._AliasQuery(
+                [row for row in self._rows if int(row.id) in ids]
+            )
+
+        def only(self, *_fields):
+            return list(self._rows)
+
+    class _FakeManager:
+        def __init__(self, by_alias):
+            self._by_alias = by_alias
+
+        def using(self, alias):
+            value = self._by_alias.get(alias)
+            if isinstance(value, Exception):
+                raise value
+            if value is None:
+                raise RuntimeError(f'alias unavailable: {alias}')
+            return PilotSnapshotUserLookupTest._AliasQuery(value)
+
+    def _fake_user_model(self, by_alias):
+        return SimpleNamespace(objects=self._FakeManager(by_alias))
+
+    def test_prefers_eve_db_alias(self):
+        user_model = self._fake_user_model(
+            {
+                'cube': [SimpleNamespace(id=5, username='leorises')],
+                'default': [SimpleNamespace(id=5, username='wrong_default')],
+            }
+        )
+
+        resolved = _load_users_by_id(
+            user_model=user_model,
+            pkids=[5],
+            preferred_aliases=['cube', 'default'],
+        )
+
+        self.assertEqual(resolved[5].username, 'leorises')
+
+    def test_falls_back_when_preferred_alias_unavailable(self):
+        user_model = self._fake_user_model(
+            {
+                'cube': RuntimeError('db unavailable'),
+                'default': [SimpleNamespace(id=7, username='fallback_user')],
+            }
+        )
+
+        resolved = _load_users_by_id(
+            user_model=user_model,
+            pkids=[7],
+            preferred_aliases=['cube', 'default'],
+        )
+
+        self.assertEqual(resolved[7].username, 'fallback_user')
 
 
 # ── Model ───────────────────────────────────────────────────────────
@@ -317,24 +453,30 @@ class MumbleModelTest(TestCase):
 
 
 class ControlClientAuthTest(TestCase):
-    @override_settings(MURMUR_CONTROL_PSK='primary-control-secret')
+    @override_settings(FGBG_PSK='primary-control-secret')
     @patch('fg.control.urlopen')
-    def test_post_json_sends_control_psk_header(self, mock_urlopen):
+    def test_post_json_sends_fgbg_psk_headers(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
 
         _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
 
         request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header('X-fgbg-psk'), 'primary-control-secret')
         self.assertEqual(request.get_header('X-murmur-control-psk'), 'primary-control-secret')
 
-    @override_settings(MURMUR_CONTROL_PSK='', MURMUR_CONTROL_SHARED_SECRET='fallback-control-secret')
+    @override_settings(
+        FGBG_PSK='',
+        MURMUR_CONTROL_PSK='',
+        MURMUR_CONTROL_SHARED_SECRET='fallback-control-secret',
+    )
     @patch('fg.control.urlopen')
-    def test_post_json_uses_shared_secret_fallback_header(self, mock_urlopen):
+    def test_post_json_uses_legacy_shared_secret_fallback_header(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
 
         _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
 
         request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header('X-fgbg-psk'), 'fallback-control-secret')
         self.assertEqual(request.get_header('X-murmur-control-psk'), 'fallback-control-secret')
 
 
@@ -467,7 +609,16 @@ class AccessRuleSyncClientTest(TestCase):
         mock_post_json.return_value = {'status': 'completed', 'total': 1}
 
         response = self.control_client.sync_access_rules(
-            [{'entity_id': 99000001, 'entity_type': 'pilot', 'deny': True, 'note': 'seed', 'created_by': 'tester'}],
+            [
+                {
+                    'entity_id': 99000001,
+                    'entity_type': 'pilot',
+                    'deny': False,
+                    'acl_admin': True,
+                    'note': 'seed',
+                    'created_by': 'tester',
+                }
+            ],
             requested_by='test-user',
             is_super=False,
         )
@@ -479,6 +630,15 @@ class AccessRuleSyncClientTest(TestCase):
         self.assertFalse(payload['is_super'])
         self.assertEqual(payload['rules'][0]['entity_id'], 99000001)
         self.assertEqual(payload['rules'][0]['entity_type'], 'pilot')
+        self.assertTrue(payload['rules'][0]['acl_admin'])
+
+    def test_sync_access_rules_rejects_acl_admin_for_non_pilot(self):
+        with self.assertRaises(MurmurSyncError):
+            self.control_client.sync_access_rules(
+                [{'entity_id': 98000001, 'entity_type': 'corporation', 'deny': False, 'acl_admin': True}],
+                requested_by='test-user',
+                is_super=True,
+            )
 
     @patch('fg.control._post_json')
     def test_sync_access_rules_with_reconcile_posts_provision_payload(self, mock_post_json):
@@ -513,6 +673,58 @@ class AccessRuleSyncClientTest(TestCase):
         self.assertTrue(second_payload['reconcile'])
         self.assertTrue(second_payload['dry_run'])
         self.assertEqual(second_payload['server_id'], 7)
+
+    @patch('fg.control._post_json')
+    def test_sync_access_rules_with_snapshot_posts_snapshot_before_provision(self, mock_post_json):
+        responses = [
+            {'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0},
+            {'status': 'completed', 'changed': True, 'account_count': 1, 'character_count': 2},
+            {'status': 'completed', 'murmur_reconcile': [{'server': 'main', 'action': 'noop'}]},
+        ]
+
+        def side_effect(*args, **kwargs):
+            return responses.pop(0)
+
+        mock_post_json.side_effect = side_effect
+
+        response = self.control_client.sync_access_rules(
+            [{'entity_id': 99000001, 'entity_type': 'pilot', 'deny': False, 'note': 'seed', 'created_by': 'tester'}],
+            requested_by='sync-user',
+            is_super=True,
+            pilot_snapshot={
+                'generated_at': '2026-03-20T00:00:00Z',
+                'accounts': [
+                    {
+                        'pkid': 42,
+                        'characters': [
+                            {
+                                'character_id': 9001,
+                                'character_name': 'Pilot One',
+                                'corporation_id': 77,
+                                'corporation_name': 'Corp One',
+                                'alliance_id': 88,
+                                'alliance_name': 'Alliance One',
+                                'is_main': True,
+                            }
+                        ],
+                    }
+                ],
+            },
+            reconcile=True,
+        )
+
+        self.assertEqual(response['status'], 'completed')
+        self.assertIn('pilot_snapshot', response)
+        self.assertIn('provision', response)
+        self.assertEqual(mock_post_json.call_count, 3)
+        first_path, _ = mock_post_json.call_args_list[0].args
+        second_path, second_payload = mock_post_json.call_args_list[1].args
+        third_path, _ = mock_post_json.call_args_list[2].args
+        self.assertEqual(first_path, '/v1/access-rules/sync')
+        self.assertEqual(second_path, '/v1/pilot-snapshot/sync')
+        self.assertTrue(second_payload['is_super'])
+        self.assertEqual(second_payload['accounts'][0]['pkid'], 42)
+        self.assertEqual(third_path, '/v1/provision')
 
 
 # ── Views ───────────────────────────────────────────────────────────
@@ -1242,7 +1454,17 @@ class ProfilePanelProviderTest(TestCase):
         self.assertEqual({panel['server'].pk for panel in panels}, {self.server1.pk, self.server2.pk})
         self.assertEqual({panel['template'] for panel in panels}, {'fg/panels/profile_panel.html'})
 
-    def test_duplicate_username_gets_slot_suffix(self):
+    def test_profile_panel_defaults_port_when_server_address_has_no_port(self):
+        server_without_port = _make_server(name='Server No Port', address='voice-dev.aixtools.com')
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == server_without_port.pk)
+        self.assertEqual(panel['server_address'], 'voice-dev.aixtools.com')
+        self.assertEqual(panel['server_port'], '64738')
+
+    def test_duplicate_username_keeps_base_username(self):
         MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')
         MumbleUser.objects.create(user=self.user, server=self.server2, username='Pilot_Name', pwhash='h')
         request = self._request()
@@ -1250,7 +1472,68 @@ class ProfilePanelProviderTest(TestCase):
         panels = build_profile_panels(request)
         usernames = sorted(panel['username_with_slot'] for panel in panels if panel['username_with_slot'])
 
-        self.assertEqual(usernames, ['Pilot_Name:1', 'Pilot_Name:2'])
+        self.assertEqual(usernames, ['Pilot_Name', 'Pilot_Name'])
+
+    def test_panel_marks_admin_flag_when_registration_is_admin(self):
+        MumbleUser.objects.create(
+            user=self.user,
+            server=self.server1,
+            username='Panel_Main',
+            pwhash='h',
+            is_mumble_admin=True,
+        )
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
+        self.assertTrue(panel['is_admin'])
+
+    def test_panel_prefers_computed_display_name(self):
+        EveAllianceInfo.objects.create(
+            alliance_id=501001,
+            alliance_name='Panel Alliance',
+            alliance_ticker='ALLY',
+        )
+        EveCorporationInfo.objects.create(
+            corporation_id=401001,
+            corporation_name='Panel Corp',
+            corporation_ticker='CORP',
+        )
+        MumbleUser.objects.create(
+            user=self.user,
+            server=self.server1,
+            username='Panel_Main',
+            display_name='Old Display Name',
+            pwhash='h',
+        )
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
+        self.assertEqual(panel['display_name'], '[ALLY CORP] Panel Main')
+        self.assertFalse(panel['display_name_is_fallback'])
+
+    def test_panel_uses_placeholder_display_name_when_cached_tickers_are_missing(self):
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
+        self.assertEqual(panel['display_name'], '[???? ????] Panel Main')
+        self.assertEqual(panel['username_with_slot'], '[???? ????] Panel Main')
+        self.assertFalse(panel['display_name_is_fallback'])
+
+    @patch('fg.views._compute_display_name', side_effect=RuntimeError('broken display-name computation'))
+    def test_panel_falls_back_to_character_name_when_display_name_unavailable(self, _mock_display_name):
+        request = self._request()
+
+        panels = build_profile_panels(request)
+
+        panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
+        self.assertEqual(panel['display_name'], 'Panel Main')
+        self.assertTrue(panel['display_name_is_fallback'])
 
     def test_temp_password_is_read_once(self):
         MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')
@@ -1514,6 +1797,7 @@ class ProfileContextTest(TestCase):
         )
         resp = self.client.get(reverse('profile'))
         self.assertContains(resp, 'Test_User')
+        self.assertNotContains(resp, 'Display Name')
         self.assertNotContains(resp, 'Get Murmur Credentials')
 
     def test_temp_password_shown_once(self):
@@ -1531,8 +1815,8 @@ class ProfileContextTest(TestCase):
         resp = self.client.get(reverse('profile'))
         data = resp.context['mumble_server_data']
         self.assertEqual(len(data), 2)
-        self.assertContains(resp, 'Test Server')
-        self.assertContains(resp, 'Server 2')
+        self.assertEqual([data[0]['server'].pk, data[1]['server'].pk], [self.server.pk, server2.pk])
+        self.assertContains(resp, 'MUMBLE')
 
 
 # ── ACL tests ─────────────────────────────────────────────────────

@@ -39,7 +39,11 @@ def _get_db_for_eve():
     """
     from django.db import connections
     if 'cube' in connections.databases:
-        return 'cube'
+        try:
+            if 'accounts_evecharacter' in connections['cube'].introspection.table_names():
+                return 'cube'
+        except Exception:
+            pass
     EveCharacter = _get_eve_character_model()
     if EveCharacter is None:
         return None

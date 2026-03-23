@@ -17,6 +17,7 @@ from django.conf import settings
 from django.utils.timezone import now
 
 from fg.contracts import MurmurContract
+from fgbg_common.snapshot import PilotSnapshot
 
 REQUEST_TIMEOUT_SECONDS = 5
 CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:18080'
@@ -50,14 +51,23 @@ def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
         headers['Content-Type'] = 'application/json'
 
     shared_secret = (
+        os.getenv('BG_PSK', '').strip()
+        or
+        os.getenv('FGBG_PSK', '').strip()
+        or
         os.getenv('MURMUR_CONTROL_PSK', '').strip()
         or os.getenv('MURMUR_CONTROL_SHARED_SECRET', '').strip()
+        or
+        getattr(settings, 'BG_PSK', None)
+        or
+        getattr(settings, 'FGBG_PSK', None)
         or
         getattr(settings, 'MURMUR_CONTROL_PSK', None)
         or getattr(settings, 'MURMUR_CONTROL_SHARED_SECRET', None)
         or ''
     ).strip()
     if shared_secret:
+        headers['X-FGBG-PSK'] = shared_secret
         headers['X-Murmur-Control-PSK'] = shared_secret
     return headers
 
@@ -196,6 +206,14 @@ def _sync_endpoint_payload(mumble_user, *, password: str | None = None) -> dict[
     if password is not None:
         payload['password'] = password
     return payload
+
+
+def _normalize_pilot_snapshot_payload(snapshot: PilotSnapshot | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(snapshot, PilotSnapshot):
+        return snapshot.as_dict()
+    if not isinstance(snapshot, dict):
+        raise MurmurSyncError('pilot_snapshot must be a PilotSnapshot or dict payload')
+    return PilotSnapshot.from_mapping(snapshot).as_dict()
 
 
 class BgControlClient:
@@ -397,6 +415,7 @@ class BgControlClient:
         *,
         requested_by: str | None = None,
         is_super: bool = True,
+        pilot_snapshot: PilotSnapshot | dict[str, Any] | None = None,
         reconcile: bool = False,
         server_id: int | None = None,
         dry_run: bool = False,
@@ -418,12 +437,20 @@ class BgControlClient:
             deny = rule.get('deny')
             if not isinstance(deny, bool):
                 raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: deny')
+            acl_admin = rule.get('acl_admin', False)
+            if not isinstance(acl_admin, bool):
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: acl_admin')
+            if acl_admin and entity_type != 'pilot':
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: acl_admin requires pilot entity_type')
+            if acl_admin and deny:
+                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: denied pilots cannot be acl_admin')
 
             payload_rules.append(
                 {
                     'entity_id': entity_id,
                     'entity_type': entity_type,
                     'deny': deny,
+                    'acl_admin': acl_admin,
                     'note': str(rule.get('note', '') or ''),
                     'created_by': str(rule.get('created_by', '') or ''),
                 }
@@ -437,6 +464,17 @@ class BgControlClient:
             },
             requested_by=requested_by,
         )
+
+        if pilot_snapshot is not None:
+            snapshot_response = _post_json(
+                '/v1/pilot-snapshot/sync',
+                {
+                    'is_super': bool(is_super),
+                    **_normalize_pilot_snapshot_payload(pilot_snapshot),
+                },
+                requested_by=requested_by,
+            )
+            response['pilot_snapshot'] = snapshot_response
 
         # Optional: push eligibility into BG provisioning and Murmur reconcile.
         # This is a second request to preserve historical /v1/access-rules/sync

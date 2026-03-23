@@ -50,6 +50,12 @@ class ACLAuditTest(TestCase):
         self.factory = RequestFactory()
         self.admin_site = AdminSite()
         self.admin = AccessRuleAdmin(AccessRule, self.admin_site)
+        pilot_snapshot = patch(
+            'fg.acl_sync.serialize_pilot_snapshot',
+            return_value={'generated_at': '2026-03-20T00:00:00Z', 'accounts': []},
+        )
+        self.mock_serialize_pilot_snapshot = pilot_snapshot.start()
+        self.addCleanup(pilot_snapshot.stop)
 
     @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 1, 'updated': 0, 'deleted': 0})
     def test_batch_create_logs_audit_entry(self, mock_sync_access_rules):
@@ -221,18 +227,52 @@ class ACLAuditTest(TestCase):
         self.assertEqual(data['total'], 1)
         self.assertIn('ACL synchronized to BG', data['message'])
 
+    @patch(
+        'fg.acl_sync.serialize_pilot_snapshot',
+        return_value={
+            'generated_at': '2026-03-20T00:00:00Z',
+            'accounts': [
+                {
+                    'pkid': 42,
+                    'main_character_id': 9001,
+                    'main_character_name': 'Pilot One',
+                    'characters': [
+                        {
+                            'character_id': 9001,
+                            'character_name': 'Pilot One',
+                            'corporation_id': 77,
+                            'corporation_name': 'Corp One',
+                            'alliance_id': 88,
+                            'alliance_name': 'Alliance One',
+                            'is_main': True,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
     @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
-    def test_sync_acl_rules_defaults_to_reconcile(self, mock_sync_access_rules):
-        _grant_acl_perm(self.user, 'view_accessrule')
-        _grant_acl_perm(self.user, 'change_accessrule')
-        AccessRule.objects.create(entity_id=123456, entity_type='pilot', deny=False, note='seed')
+    def test_sync_acl_rules_to_bg_defaults_to_reconcile_and_sends_snapshot(
+        self,
+        mock_sync_access_rules,
+        mock_serialize_pilot_snapshot,
+    ):
+        rule = AccessRule.objects.create(entity_id=123456, entity_type='pilot', deny=False, note='seed')
 
-        response = self.client.post(reverse('mumble:acl_sync'))
+        response = sync_acl_rules_to_bg(
+            requested_by=self.user.username,
+            actor_username=self.user.username,
+            source='acl_ui_sync',
+            trigger='manual',
+            rule=rule,
+        )
 
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['status'], 'completed')
+        mock_serialize_pilot_snapshot.assert_called_once_with()
         mock_sync_access_rules.assert_called_once()
         _, kwargs = mock_sync_access_rules.call_args
         self.assertIs(kwargs.get('reconcile'), True)
+        self.assertEqual(kwargs.get('pilot_snapshot', {}).get('accounts', [])[0]['pkid'], 42)
 
     @patch('fg.views._sync_acl_rules_after_change', side_effect=MurmurSyncError('Control endpoint unreachable: connection refused'))
     def test_manual_sync_ajax_reports_bg_unavailable(self, mock_sync_acl_rules_after_change):

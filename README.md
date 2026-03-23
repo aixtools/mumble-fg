@@ -34,7 +34,6 @@ This split is intentionally incomplete. The Django code here still expects broad
 
 - `accounts`
 - `modules.corporation`
-- `modules.esi_queue`
 - Murmur contract models resolved through `fg.models`
 - host account/permission adapters resolved through `fg.host`
 - fg/bg control transport through `fg.control`
@@ -47,8 +46,10 @@ Those seams should be redesigned explicitly rather than left shared implicitly.
 
 ## Pilot Eligibility Rules
 
-FG owns the access-control list (ACL) and pushes decisions to BG via the control channel.
-BG independently provisions Mumble accounts from these rules.
+FG owns the access-control list (ACL) and is the only side that reads host-side
+`PILOT_DBMS` data. FG pushes both ACL rules and a full account-oriented pilot snapshot to BG
+via the control channel. BG provisions Mumble accounts from that cached snapshot
+plus the synced ACL rules.
 
 ### Decision Tables (admin-managed in FG)
 
@@ -88,9 +89,29 @@ The ACL panel provides two on-demand pilot lists:
 ACL changes now trigger an immediate full-table FG→BG sync, and the ACL page
 also exposes a manual `Sync BG` action for users with `change_accessrule`.
 For host-side scheduling, `manage.py sync_mumble_acl` runs the same full-table
-sync and appends a `sync` audit entry.
+sync and appends a `sync` audit entry. The sync sequence is:
 
-Shared fg/bg naming and boundary conventions are documented in [docs/conventions.md](/home/michael/prj/mumble-fg/docs/conventions.md).
-Dev deploy/bootstrap guidance is documented in [docs/bootstrap-dev-deploy.md](/home/michael/prj/mumble-fg/docs/bootstrap-dev-deploy.md).
-FG/BG smoke-test checklist is documented in [docs/fg-bg-integration-smoke.md](/home/michael/prj/mumble-fg/docs/fg-bg-integration-smoke.md).
-Backup and restore verification steps are documented in [docs/pilot-backup-restore-probe.md](/home/michael/prj/mumble-fg/docs/pilot-backup-restore-probe.md).
+1. send ACL rules to `/v1/access-rules/sync`
+2. send pilot snapshot to `/v1/pilot-snapshot/sync`
+3. optionally request reconcile via `/v1/provision`
+
+Shared fg/bg naming and boundary conventions are documented in [docs/conventions.md](./docs/conventions.md).
+Dev deploy/bootstrap guidance is documented in [docs/workflow-deploy.md](./docs/workflow-deploy.md).
+FG/BG smoke-test checklist is documented in [docs/fg-bg-integration-smoke.md](./docs/fg-bg-integration-smoke.md).
+Backup and restore verification steps are documented in [docs/pilot-backup-restore-probe.md](./docs/pilot-backup-restore-probe.md).
+
+## Commit Message Pre-check
+
+Conventional Commits are enforced for new commits.
+
+Validate a message explicitly:
+
+```bash
+make precheck COMMIT_MSG="feat(fg): add acl hash transport"
+```
+
+Enable the git hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```

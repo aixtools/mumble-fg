@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from django.urls import reverse
 
@@ -24,10 +24,13 @@ class MurmurPanelDescriptor:
     account: Any
     temp_password: str | None
     username_with_slot: str | None
+    display_name: str
+    display_name_is_fallback: bool
     server_label: str
     server_hint: str
     server_address: str
     server_port: str
+    is_admin: bool
     eligible_pilots: tuple[dict[str, Any], ...]
     show_pilot_selector: bool
     password_reset_url: str
@@ -42,10 +45,13 @@ class MurmurPanelDescriptor:
             'account': self.account,
             'temp_password': self.temp_password,
             'username_with_slot': self.username_with_slot,
+            'display_name': self.display_name,
+            'display_name_is_fallback': self.display_name_is_fallback,
             'server_label': self.server_label,
             'server_hint': self.server_hint,
             'server_address': self.server_address,
             'server_port': self.server_port,
+            'is_admin': self.is_admin,
             'eligible_pilots': list(self.eligible_pilots),
             'show_pilot_selector': self.show_pilot_selector,
             'password_reset_url': self.password_reset_url,
@@ -69,6 +75,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     """Default profile panel provider usable by any host."""
 
     provider_name = 'generic'
+    default_server_port = '64738'
 
     @staticmethod
     def _eligible_pilots(user) -> list[dict[str, Any]]:
@@ -91,21 +98,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                 for registration in safe_pilot_registrations(user_id, servers=self._active_servers())
             }
 
-    def _slot_labels(self, accounts_by_server: dict[int, Any]) -> dict[int, str | None]:
-        usernames: dict[str, list[int]] = defaultdict(list)
-        for server_id, account in accounts_by_server.items():
-            username = str(getattr(account, 'username', '') or '').strip()
-            if username:
-                usernames[username].append(server_id)
-
-        labels: dict[int, str | None] = {server_id: None for server_id in accounts_by_server}
-        for server_ids in usernames.values():
-            if len(server_ids) <= 1:
-                continue
-            for slot, server_id in enumerate(sorted(server_ids), start=1):
-                labels[server_id] = f':{slot}'
-        return labels
-
     @staticmethod
     def _server_label(server) -> str:
         return str(getattr(server, 'name', '') or '').strip() or str(getattr(server, 'address', '') or '').strip() or f'server-{server.pk}'
@@ -121,19 +113,35 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     def _server_address_port(server) -> tuple[str, str]:
         if server is None:
             return '', ''
-        address = str(getattr(server, 'address', '') or '').strip()
-        if not address:
+        raw_address = str(getattr(server, 'address', '') or '').strip()
+        if not raw_address:
             return '', ''
-        if address.startswith('[') and ']:' in address:
-            # IPv6 form: [addr]:port
-            end = address.find(']')
-            host = address[1:end]
-            port = address[end + 2 :]
-            return host, str(port or '').strip()
-        if ':' in address:
-            host, port = address.rsplit(':', 1)
-            return str(host).strip(), str(port).strip()
-        return address, ''
+        address = raw_address
+        port = ''
+
+        if '://' in raw_address:
+            parsed = urlparse(raw_address)
+            host = str(parsed.hostname or '').strip()
+            if host:
+                address = host
+            if parsed.port:
+                port = str(parsed.port)
+
+        if not port and address.startswith('['):
+            if ']:' in address:
+                end = address.find(']')
+                host = address[1:end]
+                parsed_port = address[end + 2 :].strip()
+                return host, parsed_port or GenericProfilePanelProvider.default_server_port
+            if address.endswith(']'):
+                return address[1:-1].strip(), GenericProfilePanelProvider.default_server_port
+
+        if not port and ':' in address and address.count(':') == 1:
+            host, parsed_port = address.rsplit(':', 1)
+            if parsed_port.isdigit():
+                return str(host).strip(), parsed_port
+
+        return address, port or GenericProfilePanelProvider.default_server_port
 
     def _panel_descriptor(
         self,
@@ -141,14 +149,22 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         request,
         server,
         account,
-        slot_suffix,
         eligible_pilots: list[dict[str, Any]],
     ) -> MurmurPanelDescriptor:
+        display_name, display_name_is_fallback = self._display_name(
+            request.user,
+            account=account,
+            eligible_pilots=eligible_pilots,
+        )
         username_with_slot = None
         if account is not None:
             username = str(getattr(account, 'username', '') or '').strip()
             if username:
-                username_with_slot = f'{username}{slot_suffix or ""}'
+                username_with_slot = username
+        if not username_with_slot:
+            username_with_slot = display_name or None
+        if not username_with_slot and eligible_pilots:
+            username_with_slot = str(eligible_pilots[0].get('character_name') or '').strip() or None
         server_address, server_port = self._server_address_port(server)
 
         return MurmurPanelDescriptor(
@@ -159,15 +175,37 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             account=account,
             temp_password=request.session.pop('murmur_temp_password', None),
             username_with_slot=username_with_slot,
+            display_name=display_name,
+            display_name_is_fallback=display_name_is_fallback,
             server_label=self._server_label(server) if server is not None else 'Mumble Authentication',
             server_hint=self._server_hint(server) if server is not None else 'Profile password panel',
             server_address=server_address,
             server_port=server_port,
+            is_admin=bool(getattr(account, 'is_mumble_admin', False)),
             eligible_pilots=tuple(eligible_pilots),
             show_pilot_selector=len(eligible_pilots) > 1,
             password_reset_url=reverse('mumble:profile_reset_password'),
             password_set_url=reverse('mumble:profile_set_password'),
         )
+
+    @staticmethod
+    def _display_name(user, *, account, eligible_pilots: list[dict[str, Any]]) -> tuple[str, bool]:
+        stored = str(getattr(account, 'display_name', '') or '').strip()
+        if stored:
+            return stored, False
+
+        try:
+            from fg.views import _compute_display_name
+
+            computed = str(_compute_display_name(user) or '').strip()
+            if computed:
+                return computed, False
+        except Exception:  # noqa: BLE001
+            pass
+
+        if eligible_pilots:
+            return str(eligible_pilots[0].get('character_name') or ''), True
+        return '', True
 
     def build_panels(self, request) -> list[dict[str, Any]]:
         eligible_pilots = self._eligible_pilots(request.user)
@@ -181,7 +219,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                     request=request,
                     server=None,
                     account=None,
-                    slot_suffix=None,
                     eligible_pilots=eligible_pilots,
                 ).to_panel_context()
             ]
@@ -200,8 +237,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             target_user_id = request.user.id
 
         accounts_by_server = self._accounts_by_server(target_user_id)
-        slot_labels = self._slot_labels(accounts_by_server)
-
         descriptors: list[MurmurPanelDescriptor] = []
         for server in servers:
             account = accounts_by_server.get(server.pk)
@@ -210,7 +245,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                     request=request,
                     server=server,
                     account=account,
-                    slot_suffix=slot_labels.get(server.pk),
                     eligible_pilots=eligible_pilots,
                 )
             )
