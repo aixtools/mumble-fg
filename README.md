@@ -99,3 +99,19 @@ Shared fg/bg naming and boundary conventions are documented in [docs/conventions
 Dev deploy/bootstrap guidance is documented in [docs/workflow-deploy.md](./docs/workflow-deploy.md).
 FG/BG smoke-test checklist is documented in [docs/fg-bg-integration-smoke.md](./docs/fg-bg-integration-smoke.md).
 Backup and restore verification steps are documented in [docs/pilot-backup-restore-probe.md](./docs/pilot-backup-restore-probe.md).
+
+## Commit Message Pre-check
+
+Conventional Commits are enforced for new commits.
+
+Validate a message explicitly:
+
+```bash
+make precheck COMMIT_MSG="feat(fg): add acl hash transport"
+```
+
+Enable the git hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
