@@ -232,10 +232,16 @@ class ComputeDisplayNameTest(TestCase):
         self.assertEqual(result, '[ALLY CORP] Test Pilot')
 
     def test_alliance_only(self):
-        _make_char(self.user, alliance_id=99000001, corporation_id=98000001)
+        _make_char(
+            self.user,
+            alliance_id=99000001,
+            alliance_name='Alliance Name',
+            corporation_id=98000001,
+            corporation_name='Corporation Name',
+        )
         self._cache_orgs(alliance_id=99000001, alliance_ticker='ALLY')
         result = _compute_display_name(self.user)
-        self.assertEqual(result, '[ALLY ????] Test Pilot')
+        self.assertEqual(result, '[ALLY Corporation Name] Test Pilot')
 
     def test_corp_only(self):
         _make_char(self.user, corporation_id=98000001)
@@ -243,10 +249,16 @@ class ComputeDisplayNameTest(TestCase):
         result = _compute_display_name(self.user)
         self.assertEqual(result, '[CORP] Test Pilot')
 
-    def test_unknown_tickers_use_placeholder(self):
-        _make_char(self.user, alliance_id=99000001, corporation_id=98000001)
+    def test_unknown_tickers_fallback_to_org_names(self):
+        _make_char(
+            self.user,
+            alliance_id=99000001,
+            alliance_name='Alliance Name',
+            corporation_id=98000001,
+            corporation_name='Corporation Name',
+        )
         result = _compute_display_name(self.user)
-        self.assertEqual(result, '[???? ????] Test Pilot')
+        self.assertEqual(result, '[Alliance Name Corporation Name] Test Pilot')
 
     def test_no_main_character(self):
         result = _compute_display_name(self.user)
@@ -1506,13 +1518,13 @@ class ProfilePanelProviderTest(TestCase):
         self.assertEqual(panel['display_name'], '[ALLY CORP] Panel Main')
         self.assertFalse(panel['display_name_is_fallback'])
 
-    def test_panel_uses_placeholder_display_name_when_cached_tickers_are_missing(self):
+    def test_panel_uses_org_names_when_cached_tickers_are_missing(self):
         request = self._request()
 
         panels = build_profile_panels(request)
 
         panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
-        self.assertEqual(panel['display_name'], '[???? ????] Panel Main')
+        self.assertEqual(panel['display_name'], '[Panel Alliance Panel Corp] Panel Main')
         self.assertFalse(panel['display_name_is_fallback'])
 
     @patch('fg.views._compute_display_name', side_effect=RuntimeError('broken display-name computation'))

@@ -72,9 +72,17 @@ def _display_name_from_account(
     char_name = str(main.character_name or '').strip() or f'pkid_{int(account.pkid)}'
     tags: list[str] = []
     if main.alliance_id:
-        tags.append(alliance_tickers.get(int(main.alliance_id), '????'))
+        alliance_tag = (
+            str(alliance_tickers.get(int(main.alliance_id), '') or '').strip()
+            or str(main.alliance_name or '').strip()
+        )
+        tags.append(alliance_tag or '????')
     if main.corporation_id:
-        tags.append(corporation_tickers.get(int(main.corporation_id), '????'))
+        corporation_tag = (
+            str(corporation_tickers.get(int(main.corporation_id), '') or '').strip()
+            or str(main.corporation_name or '').strip()
+        )
+        tags.append(corporation_tag or '????')
     if tags:
         return f'[{" ".join(tags)}] {char_name}'
     return char_name
