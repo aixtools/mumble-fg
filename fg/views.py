@@ -186,26 +186,50 @@ def _build_registration_target(user, server, *, existing=None):
 
 
 def _get_mumble_username(user):
+    main = get_host_adapter().get_main_character(user)
+    if main:
+        return main.character_name.replace(' ', '_')
     return user.username.replace(' ', '_')
+
+
+def _get_ticker(endpoint, label):
+    """Fetch a ticker from ESI. Returns the ticker string or empty string on failure."""
+    try:
+        from modules.esi_queue.adapter import EsiQueueClient
+        esi = EsiQueueClient(source='mumble')
+        data = esi.make_request(endpoint)
+        if data and isinstance(data, dict):
+            ticker = data.get('ticker', '')
+            if not ticker:
+                logger.warning('ESI %s response missing ticker key: %s', label, endpoint)
+            return ticker
+        logger.warning('ESI %s returned unexpected data for %s: %r', label, endpoint, data)
+    except Exception:
+        logger.exception('Failed to fetch %s ticker from ESI endpoint %s', label, endpoint)
+    return ''
 
 
 def _compute_display_name(user):
     """Build display name like [ALLIANCE.CORP] Character Name."""
-    host_adapter = get_host_adapter()
-    main = host_adapter.get_main_character(user)
+    main = get_host_adapter().get_main_character(user)
     if not main:
         return user.username
 
     char_name = main.character_name
     tags = []
 
-    if main.alliance_id:
-        alliance_ticker = host_adapter.get_alliance_ticker(main.alliance_id)
-        tags.append(alliance_ticker or '????')
+    # Prefer tickers from the host database; fall back to ESI.
+    alliance_ticker = getattr(main, 'alliance_ticker', '') or ''
+    if not alliance_ticker and main.alliance_id:
+        alliance_ticker = _get_ticker(f'/alliances/{main.alliance_id}/', 'alliance')
+    if alliance_ticker:
+        tags.append(alliance_ticker)
 
-    if main.corporation_id:
-        corporation_ticker = host_adapter.get_corporation_ticker(main.corporation_id)
-        tags.append(corporation_ticker or '????')
+    corporation_ticker = getattr(main, 'corporation_ticker', '') or ''
+    if not corporation_ticker and main.corporation_id:
+        corporation_ticker = _get_ticker(f'/corporations/{main.corporation_id}/', 'corporation')
+    if corporation_ticker:
+        tags.append(corporation_ticker)
 
     if tags:
         result = f'[{" ".join(tags)}] {char_name}'
