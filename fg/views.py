@@ -201,16 +201,11 @@ def _compute_display_name(user):
 
     if main.alliance_id:
         alliance_ticker = host_adapter.get_alliance_ticker(main.alliance_id)
-        alliance_tag = str(alliance_ticker or '').strip() or str(getattr(main, 'alliance_name', '') or '').strip()
-        tags.append(alliance_tag or '????')
+        tags.append(alliance_ticker or '????')
 
     if main.corporation_id:
         corporation_ticker = host_adapter.get_corporation_ticker(main.corporation_id)
-        corporation_tag = (
-            str(corporation_ticker or '').strip()
-            or str(getattr(main, 'corporation_name', '') or '').strip()
-        )
-        tags.append(corporation_tag or '????')
+        tags.append(corporation_ticker or '????')
 
     if tags:
         result = f'[{" ".join(tags)}] {char_name}'
