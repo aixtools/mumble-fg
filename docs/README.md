@@ -10,6 +10,7 @@ Primary reference:
 - [fg-bg-integration-smoke.md](./fg-bg-integration-smoke.md) — FG/BG smoke checklist after deploy or integration changes.
 - [pilot-backup-restore-probe.md](./pilot-backup-restore-probe.md) — generic restoreability probe for host-side `PILOT_DBMS` backups.
 - [fg-bg-contracts.md](./fg-bg-contracts.md) — explicit and implicit integration contracts.
+- [profile-panel-wireframe.md](./profile-panel-wireframe.md) — best-effort markdown sketch of the `/profile/` Mumble panel.
 
 Historical documents are archived in:
 
