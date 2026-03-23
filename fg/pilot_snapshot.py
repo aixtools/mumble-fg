@@ -101,6 +101,34 @@ def _get_db_for_eve():
     return router.db_for_read(eve_character) or 'default'
 
 
+def _load_users_by_id(*, user_model, pkids: list[int], preferred_aliases: list[str | None]) -> dict[int, Any]:
+    resolved: dict[int, Any] = {}
+    remaining: set[int] = {int(pkid) for pkid in pkids}
+    seen_aliases: set[str] = set()
+    aliases = [*(preferred_aliases or []), 'default']
+
+    for alias in aliases:
+        if not remaining:
+            break
+        normalized_alias = str(alias or '').strip() or 'default'
+        if normalized_alias in seen_aliases:
+            continue
+        seen_aliases.add(normalized_alias)
+        try:
+            rows = (
+                user_model.objects.using(normalized_alias)
+                .filter(id__in=sorted(remaining))
+                .only('id', 'username')
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        for row in rows:
+            row_id = int(row.id)
+            resolved[row_id] = row
+            remaining.discard(row_id)
+    return resolved
+
+
 def build_pilot_snapshot() -> PilotSnapshot:
     eve_character = _get_eve_character_model()
     db_alias = _get_db_for_eve()
@@ -128,11 +156,15 @@ def build_pilot_snapshot() -> PilotSnapshot:
 
     snapshot = PilotSnapshot.from_rows(rows, generated_at=now().isoformat())
     user_model = get_user_model()
-    user_db_alias = router.db_for_read(user_model) or 'default'
-    users_by_id = {
-        int(user.id): user
-        for user in user_model.objects.using(user_db_alias).filter(id__in=[account.pkid for account in snapshot.accounts])
-    }
+    account_pkids = [int(account.pkid) for account in snapshot.accounts]
+    users_by_id = _load_users_by_id(
+        user_model=user_model,
+        pkids=account_pkids,
+        preferred_aliases=[
+            db_alias,
+            router.db_for_read(user_model),
+        ],
+    )
 
     from fg.views import _compute_display_name
 

@@ -19,7 +19,12 @@ except ImportError as exc:  # pragma: no cover - environment-specific host model
 from fg.panels import build_profile_panels, get_profile_panel_provider
 from fg.cube_extension import get_i18n_urlpatterns, get_profile_panels as get_cube_profile_panels
 from fg.integration import CubeMurmurIntegration
-from fg.pilot_snapshot import _canonical_account_username, build_pilot_snapshot, serialize_pilot_snapshot
+from fg.pilot_snapshot import (
+    _canonical_account_username,
+    _load_users_by_id,
+    build_pilot_snapshot,
+    serialize_pilot_snapshot,
+)
 from modules.corporation.models import CorporationSettings
 from fg.control import BgControlClient, MurmurSyncError, _post_json
 from fg.models import (
@@ -274,6 +279,68 @@ class PilotSnapshotExportTest(TestCase):
         cache_row = PilotSnapshotHash.objects.get(pkid=user.pk)
 
         self.assertEqual(cache_row.pilot_data_hash, account_payload['pilot_data_hash'])
+
+
+class PilotSnapshotUserLookupTest(TestCase):
+    class _AliasQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, **kwargs):
+            ids = {int(value) for value in kwargs.get('id__in', [])}
+            return PilotSnapshotUserLookupTest._AliasQuery(
+                [row for row in self._rows if int(row.id) in ids]
+            )
+
+        def only(self, *_fields):
+            return list(self._rows)
+
+    class _FakeManager:
+        def __init__(self, by_alias):
+            self._by_alias = by_alias
+
+        def using(self, alias):
+            value = self._by_alias.get(alias)
+            if isinstance(value, Exception):
+                raise value
+            if value is None:
+                raise RuntimeError(f'alias unavailable: {alias}')
+            return PilotSnapshotUserLookupTest._AliasQuery(value)
+
+    def _fake_user_model(self, by_alias):
+        return SimpleNamespace(objects=self._FakeManager(by_alias))
+
+    def test_prefers_eve_db_alias(self):
+        user_model = self._fake_user_model(
+            {
+                'cube': [SimpleNamespace(id=5, username='leorises')],
+                'default': [SimpleNamespace(id=5, username='wrong_default')],
+            }
+        )
+
+        resolved = _load_users_by_id(
+            user_model=user_model,
+            pkids=[5],
+            preferred_aliases=['cube', 'default'],
+        )
+
+        self.assertEqual(resolved[5].username, 'leorises')
+
+    def test_falls_back_when_preferred_alias_unavailable(self):
+        user_model = self._fake_user_model(
+            {
+                'cube': RuntimeError('db unavailable'),
+                'default': [SimpleNamespace(id=7, username='fallback_user')],
+            }
+        )
+
+        resolved = _load_users_by_id(
+            user_model=user_model,
+            pkids=[7],
+            preferred_aliases=['cube', 'default'],
+        )
+
+        self.assertEqual(resolved[7].username, 'fallback_user')
 
 
 # ── Model ───────────────────────────────────────────────────────────
