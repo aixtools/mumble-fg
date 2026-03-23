@@ -42,7 +42,7 @@ from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers
 logger = logging.getLogger(__name__)
 _CONTROL_CLIENT = BgControlClient()
 
-_FORBIDDEN_PASSWORD_CHARS = frozenset({"'", '"', '`', '\\'})
+_FORBIDDEN_PASSWORD_CHARS = frozenset({" ", "'", '"', '`', '\\'})
 
 
 def _password_has_supported_chars(password):

@@ -40,6 +40,7 @@ from fg.views import (
     _get_mumble_username,
     _compute_display_name,
     _compute_groups,
+    _password_has_supported_chars,
     profile_password_pilot_choices,
 )
 
@@ -251,6 +252,14 @@ class ComputeDisplayNameTest(TestCase):
     def test_no_main_character(self):
         result = _compute_display_name(self.user)
         self.assertEqual(result, 'testuser')
+
+
+class PasswordPolicyTest(TestCase):
+    def test_space_is_rejected(self):
+        self.assertFalse(_password_has_supported_chars('abc def123'))
+
+    def test_printable_ascii_without_space_is_allowed(self):
+        self.assertTrue(_password_has_supported_chars('Abcd1234!@#$%^&*()-_=+[]{}'))
 
 
 class PilotSnapshotExportTest(TestCase):
