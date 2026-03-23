@@ -1522,6 +1522,7 @@ class ProfilePanelProviderTest(TestCase):
 
         panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
         self.assertEqual(panel['display_name'], '[???? ????] Panel Main')
+        self.assertEqual(panel['username_with_slot'], '[???? ????] Panel Main')
         self.assertFalse(panel['display_name_is_fallback'])
 
     @patch('fg.views._compute_display_name', side_effect=RuntimeError('broken display-name computation'))
@@ -1796,6 +1797,7 @@ class ProfileContextTest(TestCase):
         )
         resp = self.client.get(reverse('profile'))
         self.assertContains(resp, 'Test_User')
+        self.assertNotContains(resp, 'Display Name')
         self.assertNotContains(resp, 'Get Murmur Credentials')
 
     def test_temp_password_shown_once(self):

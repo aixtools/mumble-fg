@@ -151,17 +151,21 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         account,
         eligible_pilots: list[dict[str, Any]],
     ) -> MurmurPanelDescriptor:
-        username_with_slot = None
-        if account is not None:
-            username = str(getattr(account, 'username', '') or '').strip()
-            if username:
-                username_with_slot = username
-        server_address, server_port = self._server_address_port(server)
         display_name, display_name_is_fallback = self._display_name(
             request.user,
             account=account,
             eligible_pilots=eligible_pilots,
         )
+        username_with_slot = None
+        if account is not None:
+            username = str(getattr(account, 'username', '') or '').strip()
+            if username:
+                username_with_slot = username
+        if not username_with_slot:
+            username_with_slot = display_name or None
+        if not username_with_slot and eligible_pilots:
+            username_with_slot = str(eligible_pilots[0].get('character_name') or '').strip() or None
+        server_address, server_port = self._server_address_port(server)
 
         return MurmurPanelDescriptor(
             key=f'murmur-server-{getattr(server, "pk", "profile")}',

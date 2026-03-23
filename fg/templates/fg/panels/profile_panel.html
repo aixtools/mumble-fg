@@ -18,19 +18,10 @@
 
         <div class="account-info-grid">
             <div class="info-item">
-                <span class="info-label">{% trans "Display Name" %}</span>
-                <span
-                    class="info-value mumble-selected-pilot-name"
-                    data-fallback="{% if panel.display_name_is_fallback %}1{% else %}0{% endif %}"
-                >{% if panel.display_name %}{{ panel.display_name }}{% else %}-{% endif %}</span>
-            </div>
-            <div class="info-item">
                 <span class="info-label">{% trans "Username" %}</span>
                 <span class="info-value" style="user-select: all;">
                     {% if panel.username_with_slot %}
                         {{ panel.username_with_slot }}
-                    {% elif panel.account and panel.account.username %}
-                        {{ panel.account.username }}
                     {% else %}
                         -
                     {% endif %}
@@ -172,15 +163,11 @@
 
         document.querySelectorAll('.mumble-profile-panel').forEach(function(panel) {
         const selector = panel.querySelector('.mumble-pilot-selector');
-        const selectedPilotName = panel.querySelector('.mumble-selected-pilot-name');
         const statusEl = panel.querySelector('.mumble-password-status');
 
         function syncPilotSelection() {
             if (!selector) {
                 return;
-            }
-            if (selectedPilotName && selectedPilotName.dataset.fallback === '1') {
-                selectedPilotName.textContent = selector.options[selector.selectedIndex].text;
             }
             panel.querySelectorAll('.mumble-pilot-id').forEach(function(hiddenInput) {
                 hiddenInput.value = selector.value;
