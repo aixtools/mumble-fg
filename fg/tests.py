@@ -252,7 +252,7 @@ class PilotSnapshotExportTest(TestCase):
     def test_snapshot_username_canonicalization(self):
         self.assertEqual(_canonical_account_username('Leo Rises'), 'leorises')
         self.assertEqual(_canonical_account_username('cube_login_name'), 'cube_login_name')
-        self.assertEqual(_canonical_account_username('', fallback='Pilot One'), 'pilotone')
+        self.assertEqual(_canonical_account_username('', fallback=''), '')
         self.assertEqual(_canonical_account_username('', fallback='', pkid=42), 'pkid_42')
 
     def test_snapshot_includes_account_username(self):
@@ -1362,7 +1362,7 @@ class ProfilePanelProviderTest(TestCase):
         self.assertEqual(panel['server_address'], 'voice-dev.aixtools.com')
         self.assertEqual(panel['server_port'], '64738')
 
-    def test_duplicate_username_gets_slot_suffix(self):
+    def test_duplicate_username_keeps_base_username(self):
         MumbleUser.objects.create(user=self.user, server=self.server1, username='Pilot_Name', pwhash='h')
         MumbleUser.objects.create(user=self.user, server=self.server2, username='Pilot_Name', pwhash='h')
         request = self._request()
@@ -1370,7 +1370,7 @@ class ProfilePanelProviderTest(TestCase):
         panels = build_profile_panels(request)
         usernames = sorted(panel['username_with_slot'] for panel in panels if panel['username_with_slot'])
 
-        self.assertEqual(usernames, ['Pilot_Name:1', 'Pilot_Name:2'])
+        self.assertEqual(usernames, ['Pilot_Name', 'Pilot_Name'])
 
     def test_panel_marks_admin_flag_when_registration_is_admin(self):
         MumbleUser.objects.create(
@@ -1711,8 +1711,8 @@ class ProfileContextTest(TestCase):
         resp = self.client.get(reverse('profile'))
         data = resp.context['mumble_server_data']
         self.assertEqual(len(data), 2)
-        self.assertContains(resp, 'Test Server')
-        self.assertContains(resp, 'Server 2')
+        self.assertEqual([data[0]['server'].pk, data[1]['server'].pk], [self.server.pk, server2.pk])
+        self.assertContains(resp, 'MUMBLE')
 
 
 # ── ACL tests ─────────────────────────────────────────────────────

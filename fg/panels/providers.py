@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -99,21 +98,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                 for registration in safe_pilot_registrations(user_id, servers=self._active_servers())
             }
 
-    def _slot_labels(self, accounts_by_server: dict[int, Any]) -> dict[int, str | None]:
-        usernames: dict[str, list[int]] = defaultdict(list)
-        for server_id, account in accounts_by_server.items():
-            username = str(getattr(account, 'username', '') or '').strip()
-            if username:
-                usernames[username].append(server_id)
-
-        labels: dict[int, str | None] = {server_id: None for server_id in accounts_by_server}
-        for server_ids in usernames.values():
-            if len(server_ids) <= 1:
-                continue
-            for slot, server_id in enumerate(sorted(server_ids), start=1):
-                labels[server_id] = f':{slot}'
-        return labels
-
     @staticmethod
     def _server_label(server) -> str:
         return str(getattr(server, 'name', '') or '').strip() or str(getattr(server, 'address', '') or '').strip() or f'server-{server.pk}'
@@ -165,14 +149,13 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         request,
         server,
         account,
-        slot_suffix,
         eligible_pilots: list[dict[str, Any]],
     ) -> MurmurPanelDescriptor:
         username_with_slot = None
         if account is not None:
             username = str(getattr(account, 'username', '') or '').strip()
             if username:
-                username_with_slot = f'{username}{slot_suffix or ""}'
+                username_with_slot = username
         server_address, server_port = self._server_address_port(server)
         display_name, display_name_is_fallback = self._display_name(
             request.user,
@@ -232,7 +215,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                     request=request,
                     server=None,
                     account=None,
-                    slot_suffix=None,
                     eligible_pilots=eligible_pilots,
                 ).to_panel_context()
             ]
@@ -251,8 +233,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             target_user_id = request.user.id
 
         accounts_by_server = self._accounts_by_server(target_user_id)
-        slot_labels = self._slot_labels(accounts_by_server)
-
         descriptors: list[MurmurPanelDescriptor] = []
         for server in servers:
             account = accounts_by_server.get(server.pk)
@@ -261,7 +241,6 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                     request=request,
                     server=server,
                     account=account,
-                    slot_suffix=slot_labels.get(server.pk),
                     eligible_pilots=eligible_pilots,
                 )
             )

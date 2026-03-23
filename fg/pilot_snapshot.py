@@ -151,7 +151,7 @@ def build_pilot_snapshot() -> PilotSnapshot:
             pkid=account.pkid,
             account_username=_canonical_account_username(
                 str(users_by_id.get(account.pkid).username) if users_by_id.get(account.pkid) else '',
-                fallback=str(account.main_character.character_name or ''),
+                fallback='',
                 pkid=int(account.pkid),
             ),
             display_name=(
