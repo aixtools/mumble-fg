@@ -84,7 +84,7 @@ This document captures explicit contracts and implicit conventions between:
 
 ### 3.1 Profile Panel Visibility
 - Pilot sees Mumble profile panel only when ACL-eligible.
-- If multiple eligible pilot identities are available, selector is shown.
+- Profile panel is for one pilot identity; when that pilot is provisioned on multiple servers, selector is shown for server choice (`1 pilot -> N servers`).
 - Preferred selector field label is `Server`.
 - Preferred selector option text is BG server `label` (or `name` when label is absent), for example `Country 1` or `Nation 2`.
 - FG should not synthesize technical endpoint text as the primary option name when a BG label/name is present.

@@ -40,7 +40,7 @@ Best-effort markdown sketch of the current FG `/profile/` Mumble panel.
 
 Notes:
 
-- When multiple servers exist, only one panel is shown at a time; server selection switches the displayed server panel.
+- Panel scope is one pilot identity; when that pilot has registrations on multiple servers, one panel is shown at a time and server selection switches the displayed server panel (`1 pilot -> N servers`).
 - Preferred selector field label is `Server`.
 - Preferred selector option name is BG server label/name (human-readable), not a raw endpoint string.
 - `IsAdmin` is shown only when true.
