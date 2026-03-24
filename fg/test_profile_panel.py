@@ -6,7 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import EveCharacter, UserProfile
-from fg.control import MurmurSyncError
+from fg.control import BgSyncError
 from fg.models import AccessRule, ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_PILOT
 from fg.panels import build_profile_panels
 from fg.views import profile_password_pilot_choices
@@ -219,7 +219,7 @@ class ProfilePasswordActionTest(TestCase):
 
     @patch(
         'fg.views._CONTROL_CLIENT.reset_password_for_user',
-        side_effect=MurmurSyncError('Control request failed (404): Mumble registration not found'),
+        side_effect=BgSyncError('Control request failed (404): Mumble registration not found'),
     )
     def test_profile_reset_password_returns_inactive_for_ajax_when_bg_available(self, _mock_reset):
         response = self.client.post(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .control import BgControlClient, MurmurSyncError
+from .control import BgControlClient, BgSyncError
 from .models import ACL_AUDIT_ACTION_SYNC, AccessRule, append_access_rule_audit
 from .pilot_snapshot import PilotSnapshotError, serialize_pilot_snapshot
 
@@ -55,7 +55,7 @@ def sync_acl_rules_to_bg(
             reconcile=reconcile,
             server_id=provision_server_id,
         )
-    except (MurmurSyncError, PilotSnapshotError) as exc:
+    except (BgSyncError, PilotSnapshotError) as exc:
         metadata.update(
             {
                 'sync_status': 'failed',
