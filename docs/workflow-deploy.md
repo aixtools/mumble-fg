@@ -17,7 +17,7 @@ The current `.github/workflows/deploy-dev.yml` workflow:
 - also supports manual `workflow_dispatch`
 - resolves a deploy target from one JSON secret identified by a host-user label, default `CUBE_DEV_CUBE`
 - rsyncs this repository to `project_dir`
-- optionally syncs `FGBG_PSK` into a host FG env file
+- optionally syncs `BG_PSK` into a host FG env file
 - optionally restarts systemd units listed in `service_units`
 - verifies expected FG files exist on the host after sync
 
@@ -73,41 +73,37 @@ Defaults:
 The workflow syncs code only. The host Django environment still needs:
 
 - `MURMUR_CONTROL_URL` or `MURMUR_CONTROL_BASE_URL`
-- `FGBG_PSK`
+- `BG_PSK`
 - `MURMUR_PANEL_HOST`
 - `MURMUR_HOST_ADAPTER` when custom host adapters are needed
 - `MURMUR_MODEL_APP_LABEL` when a legacy host Murmur model app is still present
 
 Optional:
 
-- `MURMUR_CONTROL_PSK` or `MURMUR_CONTROL_SHARED_SECRET` as temporary legacy aliases
 - `MURMUR_MODEL_FALLBACK_APP_LABEL`
 - `MURMUR_CONTROL_TIMEOUT_SECONDS`
 
 `PILOT_DBMS` is a host-side concern. This workflow does not define or migrate it;
 it assumes the host app already has access to the pilot data it needs.
 
-## Accessing `FGBG_PSK` From BG During FG Deploy
+## Accessing `BG_PSK` From BG During FG Deploy
 
 GitHub Actions in `mumble-fg` cannot directly read repository secrets that exist
 only in `mumble-bg`.
 
 Current supported paths are:
 
-- preferred shared-secret path: define `FGBG_PSK` as an org or environment secret visible to both repos, then FG deploy reads `${{ secrets.FGBG_PSK }}`
-- host-import path: set both `env_file` and `bg_env_file` in the FG deploy target JSON, ensure the FG deploy user can read `bg_env_file`, and the workflow copies `FGBG_PSK` from the BG host env file into the FG host env file
+- preferred shared-secret path: define `BG_PSK` as an org or environment secret visible to both repos, then FG deploy reads `${{ secrets.BG_PSK }}`
+- host-import path: set both `env_file` and `bg_env_file` in the FG deploy target JSON, ensure the FG deploy user can read `bg_env_file`, and the workflow copies `BG_PSK` from the BG host env file into the FG host env file
 
 The host-import path works like this:
 
 1. FG deploy sshes to the target host
-2. it reads `FGBG_PSK` from `bg_env_file` on that host
-3. it writes or replaces `FGBG_PSK=...` in `env_file`
+2. it reads `BG_PSK` from `bg_env_file` on that host
+3. it writes or replaces `BG_PSK=...` in `env_file`
 4. the restarted FG host services then see the same secret BG is already using
 
-Compatibility note:
-
-- if BG still has only legacy `MURMUR_CONTROL_PSK`, the FG workflow will import that and write it back as `FGBG_PSK`
-- if `env_file` is unset, FG deploy remains code-sync only and skips all secret syncing
+If `env_file` is unset, FG deploy remains code-sync only and skips all secret syncing.
 
 ## One-Time Host Wiring
 

@@ -52,18 +52,7 @@ def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
 
     shared_secret = (
         os.getenv('BG_PSK', '').strip()
-        or
-        os.getenv('FGBG_PSK', '').strip()
-        or
-        os.getenv('MURMUR_CONTROL_PSK', '').strip()
-        or os.getenv('MURMUR_CONTROL_SHARED_SECRET', '').strip()
-        or
-        getattr(settings, 'BG_PSK', None)
-        or
-        getattr(settings, 'FGBG_PSK', None)
-        or
-        getattr(settings, 'MURMUR_CONTROL_PSK', None)
-        or getattr(settings, 'MURMUR_CONTROL_SHARED_SECRET', None)
+        or getattr(settings, 'BG_PSK', None)
         or ''
     ).strip()
     if shared_secret:
