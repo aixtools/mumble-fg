@@ -87,6 +87,39 @@ Optional:
 `PILOT_DBMS` is a host-side concern. This workflow does not define or migrate it;
 it assumes the host app already has access to the pilot data it needs.
 
+## Environment Settings Reference (Historical and Current)
+
+### Current (preferred)
+
+- `FGBG_PSK`
+  - control-channel shared secret FG sends to BG.
+- `MURMUR_CONTROL_URL` (or `MURMUR_CONTROL_BASE_URL`)
+  - BG control API base URL FG calls.
+- `MURMUR_PANEL_HOST`
+  - profile panel host/address display source.
+- `MURMUR_CONTROL_TIMEOUT_SECONDS`
+  - FG control request timeout.
+- `MURMUR_HOST_ADAPTER`
+  - optional host adapter override.
+- `MURMUR_MODEL_APP_LABEL`
+  - optional explicit host model app binding when legacy host models exist.
+- `MURMUR_MODEL_FALLBACK_APP_LABEL`
+  - optional fallback model label for transitional deployments.
+
+### Historical (legacy) and replacement
+
+- `MURMUR_CONTROL_PSK`
+  - replaced by: `FGBG_PSK`.
+  - status: legacy alias accepted for compatibility.
+- `MURMUR_CONTROL_SHARED_SECRET`
+  - replaced by: `FGBG_PSK`.
+  - status: legacy alias accepted for compatibility.
+
+Notes:
+
+- Keep new deployments on `FGBG_PSK` and avoid introducing new usage of legacy aliases.
+- The deploy workflow can import legacy PSK values from BG env and normalize to `FGBG_PSK` in FG env.
+
 ## Accessing `FGBG_PSK` From BG During FG Deploy
 
 GitHub Actions in `mumble-fg` cannot directly read repository secrets that exist
