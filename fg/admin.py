@@ -7,7 +7,7 @@ from django.urls import path
 from django.utils.html import format_html
 
 from .acl_sync import sync_acl_rules_to_bg
-from .control import MurmurSyncError
+from .control import BgSyncError
 from .models import (
     ACL_AUDIT_ACTION_CREATE,
     ACL_AUDIT_ACTION_DELETE,
@@ -383,7 +383,7 @@ class AccessRuleAdmin(admin.ModelAdmin):
                     source='admin_batch_create_sync',
                     trigger='implicit',
                 )
-            except MurmurSyncError as exc:
+            except BgSyncError as exc:
                 sync_status = 'failed'
                 sync_error = str(exc)
             else:
@@ -408,7 +408,7 @@ class AccessRuleAdmin(admin.ModelAdmin):
                 rule=rule,
                 acl_id=acl_id,
             )
-        except MurmurSyncError as exc:
+        except BgSyncError as exc:
             self.message_user(
                 request,
                 f'ACL was updated locally, but BG sync failed: {exc}',

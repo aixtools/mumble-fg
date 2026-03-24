@@ -1,41 +1,18 @@
-"""Pure eligibility evaluation engine — no ORM, no Django dependencies.
-
-All functions operate on plain dicts and sets. The caller (FG or BG) is
-responsible for querying its own data source and feeding the results here.
-
-Character row dicts must have these keys:
-    user_id, character_id, character_name,
-    corporation_id, corporation_name,
-    alliance_id, alliance_name
-
-Rule sets dict (``rs``) must have these keys:
-    allowed_alliances, denied_alliances,
-    allowed_corps, denied_corps,
-    allowed_pilots, denied_pilots
-Each value is a set of integer entity IDs.
-"""
+"""FG-side eligibility evaluation helpers."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .entity_types import (
+from fgbg_common.entity_types import (
     ENTITY_TYPE_ALLIANCE,
     ENTITY_TYPE_CORPORATION,
     ENTITY_TYPE_PILOT,
 )
-from .snapshot import PilotAccount, PilotSnapshot
 
-
-# ------------------------------------------------------------------
-# Rule set construction
-# ------------------------------------------------------------------
 
 def build_rule_sets(rules: list[dict[str, Any]]) -> dict[str, set[int]]:
-    """Build categorised ID sets from a list of rule dicts.
-
-    Each rule dict must have: entity_id (int), entity_type (str), deny (bool).
-    """
+    """Build categorized ID sets from ACL rules."""
     rs: dict[str, set[int]] = {
         'allowed_alliances': set(),
         'denied_alliances': set(),
@@ -57,19 +34,6 @@ def build_rule_sets(rules: list[dict[str, Any]]) -> dict[str, set[int]]:
     return rs
 
 
-def all_referenced_ids(rs: dict[str, set[int]]) -> dict[str, set[int]]:
-    """Return union of allow+deny IDs per entity type, for DB query filters."""
-    return {
-        'alliance_ids': rs['allowed_alliances'] | rs['denied_alliances'],
-        'corporation_ids': rs['allowed_corps'] | rs['denied_corps'],
-        'pilot_ids': rs['allowed_pilots'] | rs['denied_pilots'],
-    }
-
-
-# ------------------------------------------------------------------
-# Constants
-# ------------------------------------------------------------------
-
 DENIAL_REASON_LABELS: dict[str, str] = {
     ENTITY_TYPE_ALLIANCE: 'alliance',
     ENTITY_TYPE_CORPORATION: 'corp',
@@ -83,10 +47,6 @@ DENIAL_REASON_RANK: dict[str, int] = {
 }
 
 
-# ------------------------------------------------------------------
-# Single-character rule matching
-# ------------------------------------------------------------------
-
 def _denial_reason_detail(reason_type: str, row: dict[str, Any]) -> str:
     if reason_type == ENTITY_TYPE_PILOT:
         return row['character_name'] or str(row['character_id'])
@@ -96,7 +56,6 @@ def _denial_reason_detail(reason_type: str, row: dict[str, Any]) -> str:
 
 
 def _prefer_reason(current: dict[str, Any] | None, candidate: dict[str, Any]) -> dict[str, Any]:
-    """Choose the most specific reason (higher rank wins, alphabetic tie-break)."""
     if current is None:
         return candidate
     current_rank = DENIAL_REASON_RANK[current['reason_type']]
@@ -111,11 +70,7 @@ def _prefer_reason(current: dict[str, Any] | None, candidate: dict[str, Any]) ->
 
 
 def explicit_rule_match(rs: dict[str, set[int]], row: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the first (highest-priority) matching rule for one character row.
-
-    Check order: pilot > corp > alliance. Within a tier, allow is checked first.
-    Returns None if no rule matches.
-    """
+    """Return the first (highest-priority) matching rule for a character row."""
     cid = row['character_id']
     corp = row['corporation_id']
     ally = row['alliance_id']
@@ -136,7 +91,7 @@ def explicit_rule_match(rs: dict[str, set[int]], row: dict[str, Any]) -> dict[st
 
 
 def explicit_rule_matches(rs: dict[str, set[int]], row: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return ALL matching rules for one character row (can have both allow and deny)."""
+    """Return all matching rules for a character row."""
     matches: list[dict[str, Any]] = []
     cid = row['character_id']
     corp = row['corporation_id']
@@ -157,15 +112,8 @@ def explicit_rule_matches(rs: dict[str, set[int]], row: dict[str, Any]) -> list[
     return matches
 
 
-# ------------------------------------------------------------------
-# Account-level decisions
-# ------------------------------------------------------------------
-
 def account_rule_decisions(character_rows: list[dict[str, Any]], rs: dict[str, set[int]]) -> dict[int, dict[str, Any]]:
-    """Build per-account allow/deny decision from character rows and rule sets.
-
-    Returns: {user_id: {'allow': reason|None, 'deny': reason|None}}
-    """
+    """Build per-account allow/deny decision from character rows and rule sets."""
     account_rules: dict[int, dict[str, Any]] = {}
     for row in character_rows:
         matches = explicit_rule_matches(rs, row)
@@ -179,10 +127,7 @@ def account_rule_decisions(character_rows: list[dict[str, Any]], rs: dict[str, s
 
 
 def blocked_user_reasons(account_rules: dict[int, dict[str, Any]]) -> dict[int, dict[str, Any]]:
-    """Identify blocked users: allowed AND denied, where deny rank >= allow rank.
-
-    Returns: {user_id: deny_reason} for blocked users only.
-    """
+    """Identify blocked users: allowed and denied, where deny rank >= allow rank."""
     return {
         user_id: rules['deny']
         for user_id, rules in account_rules.items()
@@ -192,142 +137,21 @@ def blocked_user_reasons(account_rules: dict[int, dict[str, Any]]) -> dict[int, 
     }
 
 
-def _snapshot_character_row(account: PilotAccount, *, character) -> dict[str, Any]:
+def all_referenced_ids(rs: dict[str, set[int]]) -> dict[str, set[int]]:
+    """Return union of allow+deny IDs per entity type, for FG query filters."""
     return {
-        'user_id': account.pkid,
-        'character_id': character.character_id,
-        'character_name': character.character_name,
-        'corporation_id': character.corporation_id,
-        'corporation_name': character.corporation_name,
-        'alliance_id': character.alliance_id,
-        'alliance_name': character.alliance_name,
+        'alliance_ids': rs['allowed_alliances'] | rs['denied_alliances'],
+        'corporation_ids': rs['allowed_corps'] | rs['denied_corps'],
+        'pilot_ids': rs['allowed_pilots'] | rs['denied_pilots'],
     }
 
-
-def account_rule_decisions_from_snapshot(snapshot: PilotSnapshot, rs: dict[str, set[int]]) -> dict[int, dict[str, Any]]:
-    """Build per-account allow/deny decision from an account-oriented snapshot."""
-    account_rules: dict[int, dict[str, Any]] = {}
-    for account in snapshot.accounts:
-        user_rules = account_rules.setdefault(account.pkid, {'allow': None, 'deny': None})
-        for character in account.characters:
-            matches = explicit_rule_matches(rs, _snapshot_character_row(account, character=character))
-            for match in matches:
-                reason = {'reason_type': match['reason_type'], 'detail': match['detail']}
-                user_rules[match['action']] = _prefer_reason(user_rules[match['action']], reason)
-    return account_rules
-
-
-def blocked_main_list_from_snapshot(
-    snapshot: PilotSnapshot,
-    rs: dict[str, set[int]],
-) -> list[dict[str, Any]]:
-    """Return blocked accounts from an account-oriented snapshot."""
-    blocked_by_user = blocked_user_reasons(account_rule_decisions_from_snapshot(snapshot, rs))
-    if not blocked_by_user:
-        return []
-
-    pilots: list[dict[str, Any]] = []
-    for account in snapshot.accounts:
-        reason = blocked_by_user.get(account.pkid)
-        if not reason:
-            continue
-        main = account.main_character
-        denied_as = DENIAL_REASON_LABELS[reason['reason_type']]
-        denied_detail = reason['detail']
-        pilots.append(
-            {
-                'pkid': account.pkid,
-                'character_name': main.character_name,
-                'display_name': f'{main.character_name} (denied as: {denied_detail})',
-                'corporation': main.corporation_name or '-',
-                'alliance': main.alliance_name or '-',
-                'denied_as': denied_as,
-                'denied_detail': denied_detail,
-            }
-        )
-
-    pilots.sort(key=lambda pilot: (pilot['character_name'].lower(), pilot['pkid']))
-    return pilots
-
-
-def eligible_account_list_from_snapshot(
-    snapshot: PilotSnapshot,
-    rs: dict[str, set[int]],
-) -> list[dict[str, Any]]:
-    """Return eligible accounts from an account-oriented snapshot."""
-    blocked_ids = set(blocked_user_reasons(account_rule_decisions_from_snapshot(snapshot, rs)))
-    pilots: list[dict[str, Any]] = []
-
-    for account in snapshot.accounts:
-        if account.pkid in blocked_ids:
-            continue
-
-        allowed_rows: list[tuple[Any, dict[str, Any]]] = []
-        for character in account.characters:
-            match = explicit_rule_match(rs, _snapshot_character_row(account, character=character))
-            if not match or match.get('action') != 'allow':
-                continue
-            allowed_rows.append((character, match))
-
-        if not allowed_rows:
-            continue
-
-        main = account.main_character
-        alt_lines = sorted(
-            {
-                character.character_name
-                for character, match in allowed_rows
-                if match['reason_type'] == ENTITY_TYPE_PILOT
-                and character.character_id != main.character_id
-            },
-            key=str.lower,
-        )
-        pilots.append(
-            {
-                'pkid': account.pkid,
-                'character_name': main.character_name,
-                'pilot_lines': [main.character_name, *alt_lines],
-                'corporation': main.corporation_name or '-',
-                'alliance': main.alliance_name or '-',
-            }
-        )
-
-    pilots.sort(key=lambda pilot: (pilot['character_name'].lower(), pilot['pkid']))
-    return pilots
-
-
-def account_acl_state_by_pkid(snapshot: PilotSnapshot, rs: dict[str, set[int]]) -> dict[int, str]:
-    """Return permit/deny evaluation state per pkid from a snapshot."""
-    blocked_ids = set(blocked_user_reasons(account_rule_decisions_from_snapshot(snapshot, rs)))
-    states: dict[int, str] = {}
-    for account in snapshot.accounts:
-        if account.pkid in blocked_ids:
-            states[account.pkid] = 'deny'
-            continue
-        for character in account.characters:
-            match = explicit_rule_match(rs, _snapshot_character_row(account, character=character))
-            if match and match.get('action') == 'allow':
-                states[account.pkid] = 'permit'
-                break
-    return states
-
-
-# ------------------------------------------------------------------
-# Eligible / blocked list builders
-# ------------------------------------------------------------------
 
 def blocked_main_list(
     character_rows: list[dict[str, Any]],
     main_rows: dict[int, dict[str, Any]],
     rs: dict[str, set[int]],
 ) -> list[dict[str, Any]]:
-    """Return blocked accounts with their main character and deny reason.
-
-    Args:
-        character_rows: all character rows matching any rule
-        main_rows: {user_id: main_character_row}
-        rs: rule sets from build_rule_sets()
-    """
+    """Return blocked accounts with their main character and deny reason."""
     blocked_by_user = blocked_user_reasons(account_rule_decisions(character_rows, rs))
     if not blocked_by_user:
         return []
@@ -358,16 +182,10 @@ def eligible_account_list(
     main_rows: dict[int, dict[str, Any]],
     rs: dict[str, set[int]],
 ) -> list[dict[str, Any]]:
-    """Return eligible accounts (allowed, not blocked) with pilot alt lines.
-
-    Args:
-        character_rows: all character rows matching any rule
-        main_rows: {user_id: main_character_row}
-        rs: rule sets from build_rule_sets()
-    """
+    """Return eligible accounts (allowed, not blocked) with pilot alt lines."""
     blocked_ids = set(blocked_user_reasons(account_rule_decisions(character_rows, rs)))
 
-    allowed_rows_by_user: dict[int, list[tuple[dict, dict]]] = {}
+    allowed_rows_by_user: dict[int, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
     for row in character_rows:
         if row['user_id'] in blocked_ids:
             continue

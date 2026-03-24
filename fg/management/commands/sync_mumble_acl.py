@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
 
-from fg.control import MurmurSyncError
+from fg.control import BgSyncError
 from fg.tasks import periodic_acl_sync
 
 
@@ -10,7 +10,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         try:
             response = periodic_acl_sync()
-        except MurmurSyncError as exc:
+        except BgSyncError as exc:
             raise CommandError(f'ACL sync failed: {exc}') from exc
 
         total = response.get('total')

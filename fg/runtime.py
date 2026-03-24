@@ -10,7 +10,7 @@ from typing import Any
 from django.contrib.auth import get_user_model
 from django.utils.dateparse import parse_datetime
 
-from fg.control import BgControlClient, MurmurSyncError
+from fg.control import BgControlClient, BgSyncError
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +227,7 @@ def get_runtime_service() -> BgRuntimeService:
 def safe_list_servers() -> list[RuntimeServer]:
     try:
         return get_runtime_service().list_servers()
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning('Failed to load BG server inventory: %s', exc)
         return []
 
@@ -235,7 +235,7 @@ def safe_list_servers() -> list[RuntimeServer]:
 def safe_pilot_registrations(pkid: int, *, servers: list[RuntimeServer] | None = None) -> list[RuntimeRegistration]:
     try:
         return get_runtime_service().registrations_for_pilot(pkid, servers=servers)
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning('Failed to load BG registrations for pkid=%s: %s', pkid, exc)
         return []
 
@@ -243,7 +243,7 @@ def safe_pilot_registrations(pkid: int, *, servers: list[RuntimeServer] | None =
 def safe_registration_inventory(*, servers: list[RuntimeServer] | None = None) -> list[RuntimeRegistration]:
     try:
         return get_runtime_service().list_registrations(servers=servers)
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning('Failed to load BG registration inventory: %s', exc)
         return []
 

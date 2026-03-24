@@ -34,7 +34,7 @@ Preferred shared terms:
 Current control settings are:
 
 - `MURMUR_CONTROL_URL`
-- `FGBG_PSK`
+- `BG_PSK`
 
 ## Boundary Rules
 

@@ -15,9 +15,9 @@ The current `.github/workflows/deploy-dev.yml` workflow:
 
 - triggers on pushes to `main` and `fg-mvp`
 - also supports manual `workflow_dispatch`
-- resolves a deploy target from one JSON secret identified by a host-user label, default `CUBE_DEV_CUBE`
+- resolves a deploy target from `TARGETHOST` and `TARGETUSER` secrets
 - rsyncs this repository to `project_dir`
-- optionally syncs `FGBG_PSK` into a host FG env file
+- optionally syncs `BG_PSK` into a host FG env file
 - optionally restarts systemd units listed in `service_units`
 - verifies expected FG files exist on the host after sync
 
@@ -29,26 +29,35 @@ It does not:
 - configure the host-side `PILOT_DBMS`
 - configure BG runtime or BG deploy state
 
-## Deploy Target Secret
+## Deploy Target Secrets
 
-The workflow expects a JSON secret shaped like:
+The workflow expects:
+Use single-value secret notation in documentation as `NAME = value`.
+
+- `TARGETHOST = <hostname>`
+- `TARGETUSER = <json>`
+
+`TARGETHOST` example:
+
+```text
+cube-dev.example.net
+```
+
+`TARGETUSER` example:
 
 ```json
 {
-  "host": "dev-host.example.net",
   "user": "deploy",
   "key": "-----BEGIN OPENSSH PRIVATE KEY-----\\n...\\n-----END OPENSSH PRIVATE KEY-----",
-  "home_dir": "/home/deploy",
-  "project_dir": "/home/deploy/mumble-fg",
-  "env_file": "/home/deploy/.env/cube",
-  "bg_env_file": "/home/deploy/.env/mumble-bg",
-  "service_units": ["web.service", "worker.service", "scheduler.service"]
+  "home_dir": "~deploy",
+  "project_dir": "~deploy/mumble-fg",
+  "env_file": "~deploy/Cube/.env",
+  "service_units": ["cube-django"]
 }
 ```
 
 Required fields:
 
-- `host`
 - `user`
 - `key`
 
@@ -57,7 +66,6 @@ Optional fields:
 - `home_dir`
 - `project_dir`
 - `env_file`
-- `bg_env_file`
 - `service_units`
 
 Defaults:
@@ -65,7 +73,6 @@ Defaults:
 - `home_dir`: `/home/<user>`
 - `project_dir`: `<home_dir>/mumble-fg`
 - `env_file`: blank, which skips host env updates
-- `bg_env_file`: blank, which disables BG-host secret import
 - `service_units`: empty list, which skips restarts
 
 ## Host Runtime Settings
@@ -73,41 +80,29 @@ Defaults:
 The workflow syncs code only. The host Django environment still needs:
 
 - `MURMUR_CONTROL_URL` or `MURMUR_CONTROL_BASE_URL`
-- `FGBG_PSK`
+- `BG_PSK`
 - `MURMUR_PANEL_HOST`
 - `MURMUR_HOST_ADAPTER` when custom host adapters are needed
 - `MURMUR_MODEL_APP_LABEL` when a legacy host Murmur model app is still present
 
 Optional:
 
-- `MURMUR_CONTROL_PSK` or `MURMUR_CONTROL_SHARED_SECRET` as temporary legacy aliases
 - `MURMUR_MODEL_FALLBACK_APP_LABEL`
 - `MURMUR_CONTROL_TIMEOUT_SECONDS`
 
 `PILOT_DBMS` is a host-side concern. This workflow does not define or migrate it;
 it assumes the host app already has access to the pilot data it needs.
 
-## Accessing `FGBG_PSK` From BG During FG Deploy
+## Accessing `BG_PSK` From BG During FG Deploy
 
 GitHub Actions in `mumble-fg` cannot directly read repository secrets that exist
 only in `mumble-bg`.
 
-Current supported paths are:
+Current supported path:
 
-- preferred shared-secret path: define `FGBG_PSK` as an org or environment secret visible to both repos, then FG deploy reads `${{ secrets.FGBG_PSK }}`
-- host-import path: set both `env_file` and `bg_env_file` in the FG deploy target JSON, ensure the FG deploy user can read `bg_env_file`, and the workflow copies `FGBG_PSK` from the BG host env file into the FG host env file
+- define `BG_PSK` as an org or environment secret visible to both repos, then FG deploy reads `${{ secrets.BG_PSK }}`
 
-The host-import path works like this:
-
-1. FG deploy sshes to the target host
-2. it reads `FGBG_PSK` from `bg_env_file` on that host
-3. it writes or replaces `FGBG_PSK=...` in `env_file`
-4. the restarted FG host services then see the same secret BG is already using
-
-Compatibility note:
-
-- if BG still has only legacy `MURMUR_CONTROL_PSK`, the FG workflow will import that and write it back as `FGBG_PSK`
-- if `env_file` is unset, FG deploy remains code-sync only and skips all secret syncing
+If `env_file` is unset, FG deploy remains code-sync only and skips env syncing.
 
 ## One-Time Host Wiring
 

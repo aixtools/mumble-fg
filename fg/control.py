@@ -23,7 +23,7 @@ REQUEST_TIMEOUT_SECONDS = 5
 CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:18080'
 
 
-class MurmurSyncError(RuntimeError):
+class BgSyncError(RuntimeError):
     """Raised for control transport or rejected operations."""
 
 
@@ -52,18 +52,7 @@ def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
 
     shared_secret = (
         os.getenv('BG_PSK', '').strip()
-        or
-        os.getenv('FGBG_PSK', '').strip()
-        or
-        os.getenv('MURMUR_CONTROL_PSK', '').strip()
-        or os.getenv('MURMUR_CONTROL_SHARED_SECRET', '').strip()
-        or
-        getattr(settings, 'BG_PSK', None)
-        or
-        getattr(settings, 'FGBG_PSK', None)
-        or
-        getattr(settings, 'MURMUR_CONTROL_PSK', None)
-        or getattr(settings, 'MURMUR_CONTROL_SHARED_SECRET', None)
+        or getattr(settings, 'BG_PSK', None)
         or ''
     ).strip()
     if shared_secret:
@@ -89,10 +78,10 @@ def _decode_json_response(raw: bytes) -> dict[str, Any]:
     try:
         result = json.loads(raw.decode('utf-8'))
     except ValueError as exc:
-        raise MurmurSyncError('Control response was not valid JSON') from exc
+        raise BgSyncError('Control response was not valid JSON') from exc
 
     if not isinstance(result, dict):
-        raise MurmurSyncError('Control response shape is invalid')
+        raise BgSyncError('Control response shape is invalid')
     return result
 
 
@@ -121,7 +110,7 @@ def _request_json(
         error_reason = str(exc.reason)
         try:
             parsed_error = _decode_json_response(exc.read())
-        except MurmurSyncError:
+        except BgSyncError:
             parsed_error = {}
 
         if parsed_error:
@@ -133,9 +122,9 @@ def _request_json(
                 return parsed_error
             error_reason = str(parsed_error.get('message') or parsed_error.get('status') or error_reason)
 
-        raise MurmurSyncError(f'Control request failed ({exc.code}): {error_reason}') from exc
+        raise BgSyncError(f'Control request failed ({exc.code}): {error_reason}') from exc
     except URLError as exc:
-        raise MurmurSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
+        raise BgSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
 
     result = _decode_json_response(raw)
 
@@ -144,7 +133,7 @@ def _request_json(
     if allow_not_found:
         allowed_statuses.add('not_found')
     if status not in allowed_statuses:
-        raise MurmurSyncError(str(result.get('message', 'control rejected request')))
+        raise BgSyncError(str(result.get('message', 'control rejected request')))
 
     return result
 
@@ -212,7 +201,7 @@ def _normalize_pilot_snapshot_payload(snapshot: PilotSnapshot | dict[str, Any]) 
     if isinstance(snapshot, PilotSnapshot):
         return snapshot.as_dict()
     if not isinstance(snapshot, dict):
-        raise MurmurSyncError('pilot_snapshot must be a PilotSnapshot or dict payload')
+        raise BgSyncError('pilot_snapshot must be a PilotSnapshot or dict payload')
     return PilotSnapshot.from_mapping(snapshot).as_dict()
 
 
@@ -226,14 +215,14 @@ class BgControlClient:
         response = _get_json('/v1/servers')
         servers = response.get('servers')
         if not isinstance(servers, list):
-            raise MurmurSyncError('Server probe response did not include servers')
+            raise BgSyncError('Server probe response did not include servers')
         return [server for server in servers if isinstance(server, dict)]
 
     def list_registrations(self) -> list[dict[str, Any]]:
         response = _get_json('/v1/registrations')
         registrations = response.get('registrations')
         if not isinstance(registrations, list):
-            raise MurmurSyncError('Registration probe response did not include registrations')
+            raise BgSyncError('Registration probe response did not include registrations')
         return [registration for registration in registrations if isinstance(registration, dict)]
 
     def sync_murmur_registration(
@@ -288,7 +277,7 @@ class BgControlClient:
             return []
         registrations = response.get('registrations')
         if not isinstance(registrations, list):
-            raise MurmurSyncError('Probe response did not include registrations')
+            raise BgSyncError('Probe response did not include registrations')
         return [registration for registration in registrations if isinstance(registration, dict)]
 
     @staticmethod
@@ -298,7 +287,7 @@ class BgControlClient:
             try:
                 session_id = int(value)
             except (TypeError, ValueError):
-                raise MurmurSyncError(f'Invalid session_id in payload: {value!r}') from None
+                raise BgSyncError(f'Invalid session_id in payload: {value!r}') from None
             if session_id > 0:
                 normalized.append(session_id)
         return normalized
@@ -357,7 +346,7 @@ class BgControlClient:
         response = _post_json('/v1/password-reset', payload, requested_by=requested_by)
         resolved_password = _extract_password(response)
         if resolved_password is None:
-            raise MurmurSyncError('Control response did not include password')
+            raise BgSyncError('Control response did not include password')
         return resolved_password, _extract_murmur_userid(response)
 
     def reset_password_for_user(
@@ -423,27 +412,27 @@ class BgControlClient:
         payload_rules: list[dict[str, Any]] = []
         for idx, rule in enumerate(rules):
             if not isinstance(rule, dict):
-                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: expected object')
+                raise BgSyncError(f'Invalid ACL rule payload at index {idx}: expected object')
 
             try:
                 entity_id = int(rule['entity_id'])
             except (KeyError, TypeError, ValueError):
-                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: entity_id') from None
+                raise BgSyncError(f'Invalid ACL rule payload at index {idx}: entity_id') from None
 
             entity_type = str(rule.get('entity_type', '') or '').strip()
             if entity_type not in {'alliance', 'corporation', 'pilot'}:
-                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: entity_type')
+                raise BgSyncError(f'Invalid ACL rule payload at index {idx}: entity_type')
 
             deny = rule.get('deny')
             if not isinstance(deny, bool):
-                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: deny')
+                raise BgSyncError(f'Invalid ACL rule payload at index {idx}: deny')
             acl_admin = rule.get('acl_admin', False)
             if not isinstance(acl_admin, bool):
-                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: acl_admin')
+                raise BgSyncError(f'Invalid ACL rule payload at index {idx}: acl_admin')
             if acl_admin and entity_type != 'pilot':
-                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: acl_admin requires pilot entity_type')
+                raise BgSyncError(f'Invalid ACL rule payload at index {idx}: acl_admin requires pilot entity_type')
             if acl_admin and deny:
-                raise MurmurSyncError(f'Invalid ACL rule payload at index {idx}: denied pilots cannot be acl_admin')
+                raise BgSyncError(f'Invalid ACL rule payload at index {idx}: denied pilots cannot be acl_admin')
 
             payload_rules.append(
                 {
@@ -497,6 +486,6 @@ class BgControlClient:
 
 
 __all__ = [
-    'MurmurSyncError',
+    'BgSyncError',
     'BgControlClient',
 ]

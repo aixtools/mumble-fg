@@ -26,7 +26,7 @@ from fg.pilot_snapshot import (
     serialize_pilot_snapshot,
 )
 from modules.corporation.models import CorporationSettings
-from fg.control import BgControlClient, MurmurSyncError, _post_json
+from fg.control import BgControlClient, BgSyncError, _post_json
 from fg.models import (
     AccessRule,
     ENTITY_TYPE_ALLIANCE,
@@ -453,7 +453,7 @@ class MumbleModelTest(TestCase):
 
 
 class ControlClientAuthTest(TestCase):
-    @override_settings(FGBG_PSK='primary-control-secret')
+    @override_settings(BG_PSK='primary-control-secret')
     @patch('fg.control.urlopen')
     def test_post_json_sends_fgbg_psk_headers(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
@@ -464,13 +464,9 @@ class ControlClientAuthTest(TestCase):
         self.assertEqual(request.get_header('X-fgbg-psk'), 'primary-control-secret')
         self.assertEqual(request.get_header('X-murmur-control-psk'), 'primary-control-secret')
 
-    @override_settings(
-        FGBG_PSK='',
-        MURMUR_CONTROL_PSK='',
-        MURMUR_CONTROL_SHARED_SECRET='fallback-control-secret',
-    )
+    @override_settings(BG_PSK='fallback-control-secret')
     @patch('fg.control.urlopen')
-    def test_post_json_uses_legacy_shared_secret_fallback_header(self, mock_urlopen):
+    def test_post_json_uses_bg_psk_header(self, mock_urlopen):
         mock_urlopen.return_value = _JsonResponseStub({'status': 'completed'})
 
         _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
@@ -537,7 +533,7 @@ class LiveAdminSyncTest(TestCase):
 
     @patch('fg.control._post_json')
     def test_invalid_session_id_raises(self, mock_post_json):
-        with self.assertRaises(MurmurSyncError):
+        with self.assertRaises(BgSyncError):
             self.control_client.sync_live_admin_membership(self.mu, session_ids=['bad'])
         mock_post_json.assert_not_called()
 
@@ -595,7 +591,7 @@ class ContractMetadataSyncTest(TestCase):
 
     @patch('fg.control._post_json')
     def test_sync_contract_rejects_non_integer_fields(self, mock_post_json):
-        with self.assertRaises(MurmurSyncError):
+        with self.assertRaises(BgSyncError):
             self.control_client.sync_registration_contract(self.mu, evepilot_id='not-an-int', is_super=True)
         mock_post_json.assert_not_called()
 
@@ -633,7 +629,7 @@ class AccessRuleSyncClientTest(TestCase):
         self.assertTrue(payload['rules'][0]['acl_admin'])
 
     def test_sync_access_rules_rejects_acl_admin_for_non_pilot(self):
-        with self.assertRaises(MurmurSyncError):
+        with self.assertRaises(BgSyncError):
             self.control_client.sync_access_rules(
                 [{'entity_id': 98000001, 'entity_type': 'corporation', 'deny': False, 'acl_admin': True}],
                 requested_by='test-user',
@@ -928,7 +924,7 @@ class ToggleAdminViewTest(TestCase):
         self.assertIn('Murmur admin granted for Target_User.', messages)
         self.assertIn('Updated 2 active Murmur session(s) immediately.', messages)
 
-    @patch('fg.views._sync_live_admin_membership', side_effect=MurmurSyncError('boom'))
+    @patch('fg.views._sync_live_admin_membership', side_effect=BgSyncError('boom'))
     def test_toggle_admin_keeps_cube_state_when_live_sync_fails(self, mock_sync_live_admin_membership):
         response = self.client.post(
             reverse('mumble:toggle_admin', args=[self.mu.pk]),
@@ -1755,7 +1751,7 @@ class ProfilePasswordPanelActionTest(TestCase):
 
     @patch(
         'fg.views._CONTROL_CLIENT.reset_password_for_user',
-        side_effect=MurmurSyncError('Control request failed (404): Mumble registration not found'),
+        side_effect=BgSyncError('Control request failed (404): Mumble registration not found'),
     )
     def test_profile_reset_password_returns_inactive_for_ajax_when_bg_available(self, _mock_reset):
         response = self.client.post(

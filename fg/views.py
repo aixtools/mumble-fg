@@ -11,14 +11,15 @@ from django.urls import reverse
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 
-from fgbg_common.eligibility import (
+from .eligibility import (
+    DENIAL_REASON_RANK,
     account_rule_decisions,
-    blocked_main_list as _common_blocked_main_list,
     blocked_user_reasons,
     build_rule_sets,
-    eligible_account_list as _common_eligible_account_list,
     explicit_rule_match,
-    DENIAL_REASON_RANK,
+    all_referenced_ids,
+    blocked_main_list as _common_blocked_main_list,
+    eligible_account_list as _common_eligible_account_list,
 )
 from fgbg_common.entity_types import (
     ENTITY_TYPE_ALLIANCE,
@@ -27,7 +28,7 @@ from fgbg_common.entity_types import (
 )
 
 from .acl_sync import sync_acl_rules_to_bg
-from .control import BgControlClient, MurmurSyncError
+from .control import BgControlClient, BgSyncError
 from .host import get_host_adapter
 from .models import (
     ACL_AUDIT_ACTION_CREATE,
@@ -115,7 +116,7 @@ def _coerce_optional_int(value, *, field_name):
     try:
         return int(normalized)
     except (TypeError, ValueError) as exc:
-        raise MurmurSyncError(f'{field_name} must be an integer') from exc
+        raise BgSyncError(f'{field_name} must be an integer') from exc
 
 
 def _apply_probe_contract_view(mumble_user, probe_row):
@@ -146,7 +147,7 @@ def _runtime_registration(pkid: int, *, server_id: int):
         return None
     try:
         return get_runtime_service().registration_for_pilot_server(pkid, server_id=server_id, servers=[server])
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning(
             'Failed to load BG registration for pkid=%s server_id=%s: %s',
             pkid,
@@ -277,7 +278,7 @@ def activate(request, server_id):
         mumble_user = persisted_user
     try:
         murmur_userid = _sync_remote_registration(mumble_user)
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning(
             'Failed to provision Murmur registration for MumbleUser pk=%s on server=%s: %s',
             getattr(mumble_user, 'pk', 'bg-runtime'),
@@ -298,7 +299,7 @@ def activate(request, server_id):
     try:
         password, _ = _sync_password(mumble_user)
         request.session['murmur_temp_password'] = password
-    except MurmurSyncError:
+    except BgSyncError:
         logger.warning('Initial password request failed for new registration on server=%s', server.pk)
     messages.success(request, _('Murmur account created.'))
     return redirect('profile')
@@ -314,7 +315,7 @@ def reset_password(request, server_id):
 
     try:
         password, murmur_userid = _sync_password(mumble_user)
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning(
             'Failed to sync Murmur password reset for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -353,7 +354,7 @@ def set_password(request, server_id):
 
     try:
         resolved_password, murmur_userid = _sync_password(mumble_user, password=password)
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning(
             'Failed to sync Murmur custom password for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -405,7 +406,7 @@ def _profile_password_action_response(request):
             pkid=target_pkid,
             requested_by=str(request.user.get_username() or 'unknown'),
         )
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning('Profile password action failed for user=%s: %s', request.user.pk, exc)
         bg_unavailable = _bg_unavailable_error(exc)
         inactive_message = _('Mumble account inactive, try again later.')
@@ -528,7 +529,7 @@ def deactivate(request, server_id):
 
     try:
         _unregister_remote_registration(mumble_user)
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning(
             'Failed to unregister Murmur user for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -586,7 +587,7 @@ def mumble_manage(request):
         for pkid in sorted({mumble_user.user_id for mumble_user in mumble_users}):
             try:
                 registrations = _CONTROL_CLIENT.probe_pilot_registrations(pkid)
-            except MurmurSyncError as exc:
+            except BgSyncError as exc:
                 logger.warning('Failed to probe contract data for pkid=%s: %s', pkid, exc)
                 continue
             for registration in registrations:
@@ -626,7 +627,7 @@ def _toggle_admin_for_registration(request, mumble_user):
     synced_sessions = 0
     try:
         synced_sessions = _sync_live_admin_membership(mumble_user)
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning(
             'Failed to sync live Murmur admin membership for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -684,7 +685,7 @@ def _sync_contract_for_registration(request, mumble_user):
             'alliance_id': _coerce_optional_int(request.POST.get('alliance_id'), field_name='alliance_id'),
             'kdf_iterations': _coerce_optional_int(request.POST.get('kdf_iterations'), field_name='kdf_iterations'),
         }
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         messages.error(request, _('Invalid contract metadata: %(error)s') % {'error': exc})
         return redirect('mumble:manage')
 
@@ -696,7 +697,7 @@ def _sync_contract_for_registration(request, mumble_user):
             **requested_values,
         )
         registration = _CONTROL_CLIENT.probe_murmur_registration(mumble_user)
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         logger.warning(
             'Failed to sync contract metadata for MumbleUser pk=%s on server=%s: %s',
             mumble_user.pk,
@@ -1013,7 +1014,7 @@ def acl_batch_create(request):
                 source='acl_ui_batch_create_sync',
                 trigger='implicit',
             )
-        except MurmurSyncError as exc:
+        except BgSyncError as exc:
             sync_status = 'failed'
             sync_error = str(exc)
         else:
@@ -1084,7 +1085,6 @@ _DENIAL_REASON_LABELS = {
 def _matching_character_rows(EveCharacter, db, rs):
     """Host-specific: query EVE character DB for all characters matching any rule."""
     from django.db.models import Q
-    from fgbg_common.eligibility import all_referenced_ids
 
     ids = all_referenced_ids(rs)
     q = Q()
@@ -1330,7 +1330,7 @@ def acl_sync(request):
             source='acl_ui_sync',
             trigger='manual',
         )
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         bg_unavailable = _bg_unavailable_error(exc)
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             if bg_unavailable:
@@ -1391,7 +1391,7 @@ def acl_toggle_deny(request, rule_id):
             trigger='implicit',
             rule=rule,
         )
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         _acl_sync_failure_message(request, exc)
     return redirect('mumble:acl_list')
 
@@ -1438,7 +1438,7 @@ def acl_toggle_admin(request, rule_id):
             trigger='implicit',
             rule=rule,
         )
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         _acl_sync_failure_message(request, exc)
     return redirect('mumble:acl_list')
 
@@ -1467,7 +1467,7 @@ def acl_delete(request, rule_id):
             rule=rule,
             acl_id=deleted_acl_id,
         )
-    except MurmurSyncError as exc:
+    except BgSyncError as exc:
         _acl_sync_failure_message(request, exc)
     messages.success(request, _('ACL entry deleted.'))
     return redirect('mumble:acl_list')

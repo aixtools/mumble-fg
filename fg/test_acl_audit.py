@@ -12,7 +12,7 @@ from django.urls import reverse
 from accounts.models import UserProfile
 from fg.acl_sync import sync_acl_rules_to_bg
 from fg.admin import AccessRuleAdmin
-from fg.control import MurmurSyncError
+from fg.control import BgSyncError
 from fg.models import (
     ACL_AUDIT_ACTION_CREATE,
     ACL_AUDIT_ACTION_DELETE,
@@ -274,7 +274,7 @@ class ACLAuditTest(TestCase):
         self.assertIs(kwargs.get('reconcile'), True)
         self.assertEqual(kwargs.get('pilot_snapshot', {}).get('accounts', [])[0]['pkid'], 42)
 
-    @patch('fg.views._sync_acl_rules_after_change', side_effect=MurmurSyncError('Control endpoint unreachable: connection refused'))
+    @patch('fg.views._sync_acl_rules_after_change', side_effect=BgSyncError('Control endpoint unreachable: connection refused'))
     def test_manual_sync_ajax_reports_bg_unavailable(self, mock_sync_acl_rules_after_change):
         _grant_acl_perm(self.user, 'view_accessrule')
         _grant_acl_perm(self.user, 'change_accessrule')
@@ -291,12 +291,12 @@ class ACLAuditTest(TestCase):
         self.assertTrue(data['bg_unavailable'])
 
     @patch('fg.acl_sync._CONTROL_CLIENT.base_url', return_value='http://monitor.aixtools.org:18080')
-    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', side_effect=MurmurSyncError('Control endpoint unreachable: [Errno 111] Connection refused'))
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', side_effect=BgSyncError('Control endpoint unreachable: [Errno 111] Connection refused'))
     def test_sync_failure_logs_control_url_and_audits_it(self, mock_sync_access_rules, mock_base_url):
         AccessRule.objects.create(entity_id=123456, entity_type='pilot', deny=False, note='seed')
 
         with self.assertLogs('fg.acl_sync', level='WARNING') as captured:
-            with self.assertRaises(MurmurSyncError):
+            with self.assertRaises(BgSyncError):
                 sync_acl_rules_to_bg(
                     requested_by='leorises',
                     actor_username=self.user.username,
