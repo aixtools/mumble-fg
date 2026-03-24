@@ -95,6 +95,11 @@
                 <label style="color:var(--text-secondary);font-size:13px;">
                     <input type="checkbox" id="acl-deny-checkbox"> {% trans "Deny" %}
                 </label>
+                {% if can_manage_acl_admin %}
+                <label id="acl-admin-label" style="display:none;color:var(--text-secondary);font-size:13px;">
+                    <input type="checkbox" id="acl-admin-checkbox"> {% trans "Admin" %}
+                </label>
+                {% endif %}
                 <input type="text" id="acl-note-input" placeholder="{% trans 'Note (optional)...' %}"
                        style="width:240px;padding:6px 10px;background:var(--darker-bg);border:1px solid var(--border-color);border-radius:4px;color:var(--text-color);font-size:13px;">
                 <button type="button" id="eve-batch-submit" class="btn btn-xs btn-outline" style="padding:6px 16px;font-weight:bold;">{% trans "Create Selected" %}</button>
@@ -384,6 +389,9 @@
     const batchControls = document.getElementById('eve-batch-controls');
     const batchSubmit = document.getElementById('eve-batch-submit');
     const batchStatus = document.getElementById('eve-batch-status');
+    const denyCheckbox = document.getElementById('acl-deny-checkbox');
+    const adminCheckbox = document.getElementById('acl-admin-checkbox');
+    const adminLabel = document.getElementById('acl-admin-label');
 
     function escapeHtml(text) {
         const div = document.createElement('div');
@@ -400,6 +408,16 @@
             selectAll.indeterminate = checked.length > 0 && checked.length < all.length;
         }
         batchControls.style.display = checked.length > 0 ? 'flex' : 'none';
+        if (adminLabel && adminCheckbox) {
+            const pilotOnly = checked.length > 0 && Array.from(checked).every(cb => cb.getAttribute('data-type') === 'pilot');
+            const allowMode = !denyCheckbox.checked;
+            const showAdmin = pilotOnly;
+            adminLabel.style.display = showAdmin ? 'inline-flex' : 'none';
+            adminCheckbox.disabled = !pilotOnly || !allowMode;
+            if (!pilotOnly || !allowMode) {
+                adminCheckbox.checked = false;
+            }
+        }
     }
 
     function doSearch() {
@@ -461,7 +479,8 @@
             entities.push({ entity_id: parseInt(cb.getAttribute('data-id'), 10), entity_type: cb.getAttribute('data-type') });
         });
 
-        const deny = document.getElementById('acl-deny-checkbox').checked;
+        const deny = denyCheckbox.checked;
+        const aclAdmin = !!(adminCheckbox && !adminCheckbox.disabled && adminCheckbox.checked);
         const note = document.getElementById('acl-note-input').value.trim();
 
         batchSubmit.disabled = true;
@@ -471,7 +490,7 @@
         fetch(batchUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
-            body: JSON.stringify({ entities: entities, note: note, deny: deny }),
+            body: JSON.stringify({ entities: entities, note: note, deny: deny, acl_admin: aclAdmin }),
         })
         .then(r => r.json())
         .then(data => {
@@ -502,6 +521,9 @@
     });
 
     btn.addEventListener('click', doSearch);
+    if (denyCheckbox) {
+        denyCheckbox.addEventListener('change', updateSelectAll);
+    }
     input.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
     });

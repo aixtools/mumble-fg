@@ -972,10 +972,15 @@ def acl_batch_create(request):
     entities = data.get('entities', [])
     note = (data.get('note') or '').strip()
     deny = bool(data.get('deny', False))
+    acl_admin_requested = bool(data.get('acl_admin', False))
     created_by = request.user.get_username()
 
     if not entities:
         return JsonResponse({'error': 'No entities provided'}, status=400)
+    if acl_admin_requested and deny:
+        return JsonResponse({'error': 'Denied pilots cannot be marked as ACL admin.'}, status=400)
+    if acl_admin_requested and not _can_manage_acl_admin(request.user):
+        return JsonResponse({'error': 'Forbidden'}, status=403)
 
     created = []
     skipped = []
@@ -984,12 +989,24 @@ def acl_batch_create(request):
         entity_type = entry.get('entity_type')
         if not entity_id or entity_type not in (ENTITY_TYPE_ALLIANCE, ENTITY_TYPE_CORPORATION, ENTITY_TYPE_PILOT):
             continue
+        acl_admin = False
+        if acl_admin_requested:
+            if entity_type != ENTITY_TYPE_PILOT:
+                return JsonResponse({'error': 'ACL admin can only be set for pilot rules.'}, status=400)
+            if _pilot_has_denied_corp_or_alliance(int(entity_id)):
+                return JsonResponse(
+                    {'error': 'Pilot cannot be ACL admin while alliance or corporation deny rules apply.'},
+                    status=400,
+                )
+            if not _can_manage_acl_admin_for_pilot(request.user, int(entity_id)):
+                return JsonResponse({'error': 'Forbidden'}, status=403)
+            acl_admin = True
         rule, was_created = AccessRule.objects.get_or_create(
             entity_id=entity_id,
             defaults={
                 'entity_type': entity_type,
                 'deny': deny,
-                'acl_admin': False,
+                'acl_admin': acl_admin,
                 'note': note,
                 'created_by': created_by,
             },

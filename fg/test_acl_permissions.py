@@ -117,6 +117,72 @@ class ACLPermissionViewTest(TestCase):
             )
         self.assertEqual(response.status_code, 200)
 
+    def test_batch_create_can_set_acl_admin_for_pilot(self):
+        _grant_acl_perm(self.user, 'view_accessrule')
+        _grant_acl_perm(self.user, 'add_accessrule')
+        _grant_acl_perm(self.user, 'manage_acl_admin')
+        _grant_acl_perm(self.user, 'view_acl_admin_all')
+        self._login()
+
+        with patch('fg.views._pilot_has_denied_corp_or_alliance', return_value=False), patch(
+            'fg.views._sync_acl_rules_after_change',
+            return_value={'status': 'completed'},
+        ):
+            response = self.client.post(
+                reverse('mumble:acl_batch_create'),
+                data=json.dumps({
+                    'entities': [{'entity_id': 12345678, 'entity_type': 'pilot'}],
+                    'deny': False,
+                    'acl_admin': True,
+                }),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 200)
+        rule = AccessRule.objects.get(entity_id=12345678)
+        self.assertTrue(rule.acl_admin)
+
+    def test_batch_create_rejects_acl_admin_for_denied_pilot(self):
+        _grant_acl_perm(self.user, 'view_accessrule')
+        _grant_acl_perm(self.user, 'add_accessrule')
+        _grant_acl_perm(self.user, 'manage_acl_admin')
+        _grant_acl_perm(self.user, 'view_acl_admin_all')
+        self._login()
+
+        response = self.client.post(
+            reverse('mumble:acl_batch_create'),
+            data=json.dumps({
+                'entities': [{'entity_id': 12345678, 'entity_type': 'pilot'}],
+                'deny': True,
+                'acl_admin': True,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['error'], 'Denied pilots cannot be marked as ACL admin.')
+
+    def test_batch_create_rejects_acl_admin_when_corp_or_alliance_denied(self):
+        _grant_acl_perm(self.user, 'view_accessrule')
+        _grant_acl_perm(self.user, 'add_accessrule')
+        _grant_acl_perm(self.user, 'manage_acl_admin')
+        _grant_acl_perm(self.user, 'view_acl_admin_all')
+        self._login()
+
+        with patch('fg.views._pilot_has_denied_corp_or_alliance', return_value=True):
+            response = self.client.post(
+                reverse('mumble:acl_batch_create'),
+                data=json.dumps({
+                    'entities': [{'entity_id': 12345678, 'entity_type': 'pilot'}],
+                    'deny': False,
+                    'acl_admin': True,
+                }),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()['error'],
+            'Pilot cannot be ACL admin while alliance or corporation deny rules apply.',
+        )
+
     def test_change_permission_controls_toggle_button_and_endpoint(self):
         _grant_acl_perm(self.user, 'view_accessrule')
         self._login()
