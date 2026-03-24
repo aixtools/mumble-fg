@@ -30,6 +30,9 @@ Required secrets:
   "home_dir": "~${WorkflowUser}",
   "project_dir": "~${WorkflowUser}/mumble-fg",
   "env_file": "~${WorkflowUser}/Cube/.env",
+  "cube_project_dir": "~${WorkflowUser}/Cube",
+  "cube_venv": "~${WorkflowUser}/Cube/venv",
+  "port": "22",
   "service_units": ["cube-django"]
 }
 ```
@@ -38,16 +41,14 @@ Dev workflow currently:
 
 - resolves `TARGETHOST` and `TARGETUSER`
 - rsyncs repository content to `project_dir`
+- installs `mumble-fg` into the configured Cube venv from the synced checkout
+- runs `python manage.py migrate mumble_fg --noinput`
+- runs `python manage.py collectstatic --noinput`
 - writes `BG_PSK` into the host env file when `env_file` is configured
 - optionally restarts systemd units listed in `service_units`
 - verifies that expected FG files exist on the target
 
-It does not:
-
-- install FG into the target venv
-- migrate Django
-- collect static files
-- create host settings
+It does not create host settings.
 
 ## 3. Prod Workflow
 
