@@ -1,6 +1,6 @@
 # `/profile/` Mumble Panel Wireframe
 
-Best-effort markdown sketch of the current FG `/profile/` Mumble panel.
+Markdown approximation of the FG `/profile/` Mumble panel.
 
 ## Single server
 
