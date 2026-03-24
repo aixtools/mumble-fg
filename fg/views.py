@@ -11,12 +11,15 @@ from django.urls import reverse
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 
-from fgbg_common.eligibility import (
+from .eligibility import (
+    DENIAL_REASON_RANK,
     account_rule_decisions,
     blocked_user_reasons,
     build_rule_sets,
     explicit_rule_match,
-    DENIAL_REASON_RANK,
+    all_referenced_ids,
+    blocked_main_list as _common_blocked_main_list,
+    eligible_account_list as _common_eligible_account_list,
 )
 from fgbg_common.entity_types import (
     ENTITY_TYPE_ALLIANCE,
@@ -26,11 +29,6 @@ from fgbg_common.entity_types import (
 
 from .acl_sync import sync_acl_rules_to_bg
 from .control import BgControlClient, MurmurSyncError
-from .eligibility import (
-    all_referenced_ids,
-    blocked_main_list as _common_blocked_main_list,
-    eligible_account_list as _common_eligible_account_list,
-)
 from .host import get_host_adapter
 from .models import (
     ACL_AUDIT_ACTION_CREATE,
