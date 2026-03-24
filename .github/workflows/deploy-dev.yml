@@ -210,16 +210,15 @@ jobs:
             "DEPLOY_SERVICE_UNITS_CSV='${DEPLOY_SERVICE_UNITS_CSV}' bash -s" <<'EOF'
           set -euo pipefail
 
-          if ! sudo -n true >/dev/null 2>&1; then
-            echo "No passwordless sudo available; skipping service restarts."
-            exit 0
-          fi
-
           restart_if_present() {
             local unit="$1"
-            if sudo -n systemctl list-unit-files "${unit}" >/dev/null 2>&1; then
+            if systemctl list-unit-files "${unit}" >/dev/null 2>&1; then
               echo "Restarting ${unit}"
-              sudo -n systemctl restart "${unit}" || true
+              if sudo -n systemctl restart "${unit}"; then
+                echo "Restarted ${unit}"
+              else
+                echo "Passwordless sudo not allowed for restart ${unit}; skipping."
+              fi
             else
               echo "Unit not present: ${unit}"
             fi
