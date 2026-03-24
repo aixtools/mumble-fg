@@ -15,7 +15,7 @@ The current `.github/workflows/deploy-dev.yml` workflow:
 
 - triggers on pushes to `main` and `fg-mvp`
 - also supports manual `workflow_dispatch`
-- resolves a deploy target from one JSON secret identified by a host-user label, default `CUBE_DEV_CUBE`
+- resolves a deploy target from `TARGETHOST` and `TARGETUSER` secrets
 - rsyncs this repository to `project_dir`
 - optionally syncs `BG_PSK` into a host FG env file
 - optionally restarts systemd units listed in `service_units`
@@ -29,26 +29,35 @@ It does not:
 - configure the host-side `PILOT_DBMS`
 - configure BG runtime or BG deploy state
 
-## Deploy Target Secret
+## Deploy Target Secrets
 
-The workflow expects a JSON secret shaped like:
+The workflow expects:
+Use single-value secret notation in documentation as `NAME = value`.
+
+- `TARGETHOST = <hostname>`
+- `TARGETUSER = <json>`
+
+`TARGETHOST` example:
+
+```text
+cube-dev.example.net
+```
+
+`TARGETUSER` example:
 
 ```json
 {
-  "host": "dev-host.example.net",
   "user": "deploy",
   "key": "-----BEGIN OPENSSH PRIVATE KEY-----\\n...\\n-----END OPENSSH PRIVATE KEY-----",
-  "home_dir": "/home/deploy",
-  "project_dir": "/home/deploy/mumble-fg",
-  "env_file": "/home/deploy/.env/cube",
-  "bg_env_file": "/home/deploy/.env/mumble-bg",
-  "service_units": ["web.service", "worker.service", "scheduler.service"]
+  "home_dir": "~deploy",
+  "project_dir": "~deploy/mumble-fg",
+  "env_file": "~deploy/Cube/.env",
+  "service_units": ["cube-django"]
 }
 ```
 
 Required fields:
 
-- `host`
 - `user`
 - `key`
 
@@ -57,7 +66,6 @@ Optional fields:
 - `home_dir`
 - `project_dir`
 - `env_file`
-- `bg_env_file`
 - `service_units`
 
 Defaults:
@@ -65,7 +73,6 @@ Defaults:
 - `home_dir`: `/home/<user>`
 - `project_dir`: `<home_dir>/mumble-fg`
 - `env_file`: blank, which skips host env updates
-- `bg_env_file`: blank, which disables BG-host secret import
 - `service_units`: empty list, which skips restarts
 
 ## Host Runtime Settings
@@ -91,19 +98,11 @@ it assumes the host app already has access to the pilot data it needs.
 GitHub Actions in `mumble-fg` cannot directly read repository secrets that exist
 only in `mumble-bg`.
 
-Current supported paths are:
+Current supported path:
 
-- preferred shared-secret path: define `BG_PSK` as an org or environment secret visible to both repos, then FG deploy reads `${{ secrets.BG_PSK }}`
-- host-import path: set both `env_file` and `bg_env_file` in the FG deploy target JSON, ensure the FG deploy user can read `bg_env_file`, and the workflow copies `BG_PSK` from the BG host env file into the FG host env file
+- define `BG_PSK` as an org or environment secret visible to both repos, then FG deploy reads `${{ secrets.BG_PSK }}`
 
-The host-import path works like this:
-
-1. FG deploy sshes to the target host
-2. it reads `BG_PSK` from `bg_env_file` on that host
-3. it writes or replaces `BG_PSK=...` in `env_file`
-4. the restarted FG host services then see the same secret BG is already using
-
-If `env_file` is unset, FG deploy remains code-sync only and skips all secret syncing.
+If `env_file` is unset, FG deploy remains code-sync only and skips env syncing.
 
 ## One-Time Host Wiring
 
