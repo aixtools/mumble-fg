@@ -6,17 +6,10 @@ on:
       - main
       - fg-mvp
   workflow_dispatch:
-    inputs:
-      deploy_target_name:
-        description: 'Host-user label naming the deploy target secret (for example CUBE_DEV_CUBE)'
-        required: false
-        default: 'CUBE_DEV_CUBE'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      DEPLOY_TARGET_NAME: ${{ github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE' }}
 
     steps:
       - name: Checkout code
@@ -24,7 +17,8 @@ jobs:
 
       - name: Resolve deploy target
         env:
-          DEPLOY_TARGET_JSON: ${{ secrets[github.event.inputs.deploy_target_name || 'CUBE_DEV_CUBE'] }}
+          TARGETHOST: ${{ secrets.TARGETHOST }}
+          TARGETUSER: ${{ secrets.TARGETUSER }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -32,75 +26,38 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          from json import JSONDecodeError
           from pathlib import Path
 
-          def _parse_target_payload(raw: str, target_name: str) -> dict:
+          def _parse_target_payload(raw: str, secret_name: str) -> dict:
               try:
                   payload = json.loads(raw)
-              except JSONDecodeError:
-                  # Common operator input mistake: literal newlines in "key" JSON string.
-                  key_field = '"key"'
-                  key_index = raw.find(key_field)
-                  if key_index < 0:
-                      raise
-                  colon_index = raw.find(':', key_index + len(key_field))
-                  if colon_index < 0:
-                      raise
-                  quote_start = raw.find('"', colon_index + 1)
-                  if quote_start < 0:
-                      raise
-
-                  i = quote_start + 1
-                  while i < len(raw):
-                      if raw[i] == '"' and raw[i - 1] != '\\':
-                          break
-                      i += 1
-                  if i >= len(raw):
-                      raise
-
-                  key_raw = raw[quote_start + 1:i]
-                  key_escaped = (
-                      key_raw
-                      .replace('\\', '\\\\')
-                      .replace('\r', '\\r')
-                      .replace('\n', '\\n')
-                      .replace('\t', '\\t')
-                  )
-                  repaired = raw[:quote_start + 1] + key_escaped + raw[i:]
-                  payload = json.loads(repaired)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f"{secret_name} must be valid JSON") from exc
 
               if not isinstance(payload, dict):
-                  raise SystemExit(f"Secret {target_name} must be a JSON object")
+                  raise SystemExit(f"Secret {secret_name} must be a JSON object")
               return payload
 
-          target_name = os.environ.get("DEPLOY_TARGET_NAME", "").strip()
-          raw = os.environ.get("DEPLOY_TARGET_JSON", "").strip()
-          if not target_name:
-              raise SystemExit("DEPLOY_TARGET_NAME is empty")
+          host = str(os.environ.get("TARGETHOST", "")).strip()
+          raw = os.environ.get("TARGETUSER", "").strip()
+          if not host:
+              raise SystemExit("TARGETHOST is empty")
           if not raw:
-              raise SystemExit(
-                  f"Missing deploy target secret payload for {target_name}. "
-                  f"Create a secret named {target_name} with JSON fields host/user/key."
-              )
+              raise SystemExit("TARGETUSER is empty")
 
-          payload = _parse_target_payload(raw, target_name)
+          payload = _parse_target_payload(raw, "TARGETUSER")
 
-          host = str(payload.get("host", "")).strip()
           user = str(payload.get("user", "")).strip()
           key = payload.get("key", "")
           home_dir = str(payload.get("home_dir", "")).strip()
           project_dir = str(payload.get("project_dir", "")).strip()
           env_file = str(payload.get("env_file", "")).strip()
-          bg_env_file = str(payload.get("bg_env_file", "")).strip()
           service_units = payload.get("service_units", [])
 
-          if not host:
-              raise SystemExit(f"Secret {target_name} missing required field: host")
           if not user:
-              raise SystemExit(f"Secret {target_name} missing required field: user")
+              raise SystemExit("TARGETUSER missing required field: user")
           if not isinstance(key, str) or not key.strip():
-              raise SystemExit(f"Secret {target_name} missing required field: key")
+              raise SystemExit("TARGETUSER missing required field: key")
           if not home_dir:
               home_dir = f"/home/{user}"
           if not project_dir:
@@ -108,7 +65,7 @@ jobs:
           if service_units is None:
               service_units = []
           if not isinstance(service_units, list):
-              raise SystemExit(f"Secret {target_name} field service_units must be a JSON list")
+              raise SystemExit("TARGETUSER field service_units must be a JSON list")
           service_units = [str(unit).strip() for unit in service_units if str(unit).strip()]
 
           key_path = Path.home() / ".ssh" / "deploy_key"
@@ -122,7 +79,6 @@ jobs:
               fh.write(f"DEPLOY_HOME_DIR={home_dir}\n")
               fh.write(f"DEPLOY_PROJECT_DIR={project_dir}\n")
               fh.write(f"DEPLOY_ENV_FILE={env_file}\n")
-              fh.write(f"DEPLOY_BG_ENV_FILE={bg_env_file}\n")
               fh.write(f"DEPLOY_SERVICE_UNITS_CSV={','.join(service_units)}\n")
           PY
 
@@ -144,56 +100,36 @@ jobs:
             -e "ssh -i ~/.ssh/deploy_key" \
             ./ "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}:${DEPLOY_PROJECT_DIR%/}/"
 
-      - name: Sync FGBG_PSK into FG env (optional)
+      - name: Sync BG_PSK into FG env (optional)
         env:
-          FGBG_PSK_SECRET: ${{ secrets.FGBG_PSK || secrets.MURMUR_CONTROL_PSK }}
+          BG_PSK_SECRET: ${{ secrets.BG_PSK }}
         run: |
           set -euo pipefail
           if [ -z "${DEPLOY_ENV_FILE:-}" ]; then
-            echo "No env_file configured in deploy target; skipping FGBG_PSK sync."
+            echo "No env_file configured in deploy target; skipping BG_PSK sync."
             exit 0
           fi
+          if [ -z "${BG_PSK_SECRET:-}" ]; then
+            echo "BG_PSK secret is empty." >&2
+            exit 1
+          fi
 
-          FGBG_PSK_SECRET_B64="$(printf '%s' "${FGBG_PSK_SECRET:-}" | base64 | tr -d '\n')"
+          BG_PSK_SECRET_B64="$(printf '%s' "${BG_PSK_SECRET}" | base64 | tr -d '\n')"
           ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
-            "DEPLOY_ENV_FILE='${DEPLOY_ENV_FILE}' DEPLOY_BG_ENV_FILE='${DEPLOY_BG_ENV_FILE}' FGBG_PSK_SECRET_B64='${FGBG_PSK_SECRET_B64}' bash -s" <<'EOF'
+            "DEPLOY_ENV_FILE='${DEPLOY_ENV_FILE}' BG_PSK_SECRET_B64='${BG_PSK_SECRET_B64}' bash -s" <<'EOF'
           set -euo pipefail
           mkdir -p "$(dirname "${DEPLOY_ENV_FILE}")"
 
-          if [ -n "${FGBG_PSK_SECRET_B64:-}" ]; then
-            FGBG_PSK="$(printf '%s' "${FGBG_PSK_SECRET_B64}" | base64 -d)"
-            FGBG_PSK_SOURCE="GitHub secret"
-          else
-            if [ -z "${DEPLOY_BG_ENV_FILE:-}" ]; then
-              echo "No shared FGBG_PSK secret and no bg_env_file configured; skipping FGBG_PSK sync."
-              exit 0
-            fi
-            if [ ! -f "${DEPLOY_BG_ENV_FILE}" ]; then
-              echo "Configured bg_env_file not found: ${DEPLOY_BG_ENV_FILE}" >&2
-              exit 1
-            fi
-            set -a
-            # shellcheck disable=SC1090
-            source "${DEPLOY_BG_ENV_FILE}"
-            set +a
-            FGBG_PSK="${FGBG_PSK:-${MURMUR_CONTROL_PSK:-}}"
-            if [ -z "${FGBG_PSK}" ]; then
-              echo "BG env file ${DEPLOY_BG_ENV_FILE} does not define FGBG_PSK or legacy MURMUR_CONTROL_PSK." >&2
-              exit 1
-            fi
-            export FGBG_PSK
-            FGBG_PSK_SOURCE="${DEPLOY_BG_ENV_FILE}"
-          fi
+          BG_PSK="$(printf '%s' "${BG_PSK_SECRET_B64}" | base64 -d)"
+          export BG_PSK
 
-          export FGBG_PSK FGBG_PSK_SOURCE
           python3 - <<'PY'
           import os
           import shlex
           from pathlib import Path
 
           env_path = Path(os.environ["DEPLOY_ENV_FILE"])
-          line = f"FGBG_PSK={shlex.quote(os.environ['FGBG_PSK'])}"
-          source = os.environ.get("FGBG_PSK_SOURCE", "unknown")
+          line = f"BG_PSK={shlex.quote(os.environ['BG_PSK'])}"
 
           if env_path.exists():
               lines = env_path.read_text(encoding="utf-8").splitlines()
@@ -203,7 +139,7 @@ jobs:
           filtered = []
           replaced = False
           for existing in lines:
-              if existing.startswith("FGBG_PSK=") or existing.startswith("MURMUR_CONTROL_PSK="):
+              if existing.startswith("BG_PSK=") or existing.startswith("FGBG_PSK=") or existing.startswith("MURMUR_CONTROL_PSK="):
                   if not replaced:
                       filtered.append(line)
                       replaced = True
@@ -213,7 +149,7 @@ jobs:
           if not replaced:
               if filtered and filtered[-1] != "":
                   filtered.append("")
-              filtered.append(f"# Synced by mumble-fg deploy workflow from {source}")
+              filtered.append("# Synced by mumble-fg deploy workflow")
               filtered.append(line)
 
           env_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
