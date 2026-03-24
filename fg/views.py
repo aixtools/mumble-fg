@@ -13,10 +13,8 @@ from django.views.decorators.http import require_POST
 
 from fgbg_common.eligibility import (
     account_rule_decisions,
-    blocked_main_list as _common_blocked_main_list,
     blocked_user_reasons,
     build_rule_sets,
-    eligible_account_list as _common_eligible_account_list,
     explicit_rule_match,
     DENIAL_REASON_RANK,
 )
@@ -28,6 +26,11 @@ from fgbg_common.entity_types import (
 
 from .acl_sync import sync_acl_rules_to_bg
 from .control import BgControlClient, MurmurSyncError
+from .eligibility import (
+    all_referenced_ids,
+    blocked_main_list as _common_blocked_main_list,
+    eligible_account_list as _common_eligible_account_list,
+)
 from .host import get_host_adapter
 from .models import (
     ACL_AUDIT_ACTION_CREATE,
@@ -1084,7 +1087,6 @@ _DENIAL_REASON_LABELS = {
 def _matching_character_rows(EveCharacter, db, rs):
     """Host-specific: query EVE character DB for all characters matching any rule."""
     from django.db.models import Q
-    from fgbg_common.eligibility import all_referenced_ids
 
     ids = all_referenced_ids(rs)
     q = Q()
