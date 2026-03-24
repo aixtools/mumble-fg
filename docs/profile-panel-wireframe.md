@@ -41,5 +41,7 @@ Best-effort markdown sketch of the current FG `/profile/` Mumble panel.
 Notes:
 
 - When multiple servers exist, only one panel is shown at a time; server selection switches the displayed server panel.
+- Preferred selector field label is `Server`.
+- Preferred selector option name is BG server label/name (human-readable), not a raw endpoint string.
 - `IsAdmin` is shown only when true.
 - If BG is unavailable, address/status show `BG unavailable` and panel actions are disabled.
