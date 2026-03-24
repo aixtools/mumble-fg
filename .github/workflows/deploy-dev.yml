@@ -53,6 +53,11 @@ jobs:
           project_dir = str(payload.get("project_dir", "")).strip()
           env_file = str(payload.get("env_file", "")).strip()
           service_units = payload.get("service_units", [])
+          port = str(payload.get("port", "22")).strip()
+          if not port:
+              port = "22"
+          cube_project_dir = str(payload.get("cube_project_dir", "")).strip()
+          cube_venv = str(payload.get("cube_venv", "")).strip()
 
           if not user:
               raise SystemExit("TARGETUSER missing required field: user")
@@ -62,6 +67,13 @@ jobs:
               home_dir = f"/home/{user}"
           if not project_dir:
               project_dir = f"{home_dir}/mumble-fg"
+          if not cube_project_dir:
+              if env_file:
+                  cube_project_dir = str(Path(env_file).resolve().parent)
+              else:
+                  cube_project_dir = f"{home_dir}/Cube"
+          if not cube_venv:
+              cube_venv = f"{cube_project_dir}/venv"
           if service_units is None:
               service_units = []
           if not isinstance(service_units, list):
@@ -76,16 +88,19 @@ jobs:
           with github_env.open("a", encoding="utf-8") as fh:
               fh.write(f"DEPLOY_TARGET_HOST={host}\n")
               fh.write(f"DEPLOY_TARGET_USER={user}\n")
+              fh.write(f"DEPLOY_TARGET_PORT={port}\n")
               fh.write(f"DEPLOY_HOME_DIR={home_dir}\n")
               fh.write(f"DEPLOY_PROJECT_DIR={project_dir}\n")
               fh.write(f"DEPLOY_ENV_FILE={env_file}\n")
+              fh.write(f"DEPLOY_CUBE_PROJECT_DIR={cube_project_dir}\n")
+              fh.write(f"DEPLOY_CUBE_VENV={cube_venv}\n")
               fh.write(f"DEPLOY_SERVICE_UNITS_CSV={','.join(service_units)}\n")
           PY
 
       - name: Set up SSH known hosts
         run: |
           set -euo pipefail
-          ssh-keyscan -H "${DEPLOY_TARGET_HOST}" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${DEPLOY_TARGET_PORT}" -H "${DEPLOY_TARGET_HOST}" >> ~/.ssh/known_hosts
 
       - name: Deploy code via rsync
         run: |
@@ -97,8 +112,34 @@ jobs:
             --exclude '.pytest_cache/' \
             --exclude '.env' \
             --exclude '.venv/' \
-            -e "ssh -i ~/.ssh/deploy_key" \
+            -e "ssh -p ${DEPLOY_TARGET_PORT} -i ~/.ssh/deploy_key" \
             ./ "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}:${DEPLOY_PROJECT_DIR%/}/"
+
+      - name: Install mumble-fg in Cube venv and run Django maintenance
+        run: |
+          set -euo pipefail
+          ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "DEPLOY_PROJECT_DIR='${DEPLOY_PROJECT_DIR}' DEPLOY_CUBE_PROJECT_DIR='${DEPLOY_CUBE_PROJECT_DIR}' DEPLOY_CUBE_VENV='${DEPLOY_CUBE_VENV}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          if [ ! -d "${DEPLOY_CUBE_VENV}" ]; then
+            echo "[deploy] Cube venv not found at ${DEPLOY_CUBE_VENV}" >&2
+            exit 1
+          fi
+          if [ ! -f "${DEPLOY_CUBE_PROJECT_DIR}/manage.py" ]; then
+            echo "[deploy] Cube manage.py not found at ${DEPLOY_CUBE_PROJECT_DIR}" >&2
+            exit 1
+          fi
+
+          echo "[deploy] Installing mumble-fg into Cube venv from ${DEPLOY_PROJECT_DIR}"
+          "${DEPLOY_CUBE_VENV}/bin/pip" install --quiet --no-deps -e "${DEPLOY_PROJECT_DIR}"
+
+          cd "${DEPLOY_CUBE_PROJECT_DIR}"
+          echo "[deploy] Running Django migrate mumble_fg"
+          "${DEPLOY_CUBE_VENV}/bin/python" manage.py migrate mumble_fg --noinput
+          echo "[deploy] Running collectstatic"
+          "${DEPLOY_CUBE_VENV}/bin/python" manage.py collectstatic --noinput
+          EOF
 
       - name: Sync BG_PSK into FG env (optional)
         env:
@@ -115,7 +156,7 @@ jobs:
           fi
 
           BG_PSK_SECRET_B64="$(printf '%s' "${BG_PSK_SECRET}" | base64 | tr -d '\n')"
-          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+          ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
             "DEPLOY_ENV_FILE='${DEPLOY_ENV_FILE}' BG_PSK_SECRET_B64='${BG_PSK_SECRET_B64}' bash -s" <<'EOF'
           set -euo pipefail
           mkdir -p "$(dirname "${DEPLOY_ENV_FILE}")"
@@ -165,7 +206,7 @@ jobs:
             exit 0
           fi
 
-          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+          ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
             "DEPLOY_SERVICE_UNITS_CSV='${DEPLOY_SERVICE_UNITS_CSV}' bash -s" <<'EOF'
           set -euo pipefail
 
@@ -193,5 +234,5 @@ jobs:
       - name: Deploy path sanity check
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
-            "test -f ${DEPLOY_PROJECT_DIR%/}/fg/views.py && test -f ${DEPLOY_PROJECT_DIR%/}/templates/fg/panels/profile_panel.html"
+          ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "test -f ${DEPLOY_PROJECT_DIR%/}/fg/views.py && test -f ${DEPLOY_PROJECT_DIR%/}/templates/fg/panels/profile_panel.html && test -f ${DEPLOY_CUBE_PROJECT_DIR%/}/manage.py"
