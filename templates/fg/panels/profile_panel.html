@@ -19,6 +19,10 @@
                     <span class="info-value" style="user-select: all;" title="{{ panel.server_hint }}">{{ panel.username_with_slot|default:panel.account.username }}</span>
                 </div>
                 <div class="info-item">
+                    <span class="info-label">{% trans "Display Name" %}</span>
+                    <span class="info-value">{{ panel.account.display_name|default:panel.account.username }}</span>
+                </div>
+                <div class="info-item">
                     <span class="info-label">{% trans "Server" %}</span>
                     <span class="info-value" style="user-select: all;">{{ panel.server.address }}</span>
                 </div>
