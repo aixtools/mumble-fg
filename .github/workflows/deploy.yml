@@ -87,6 +87,7 @@ jobs:
           key = payload.get("key", "")
           home_dir = str(payload.get("home_dir", "")).strip()
           project_dir = str(payload.get("project_dir", "")).strip()
+          env_file = str(payload.get("env_file", "")).strip()
           service_units = payload.get("service_units", [])
           port = str(payload.get("port", "22")).strip()
 
@@ -120,6 +121,7 @@ jobs:
               fh.write(f"DEPLOY_TARGET_USER={user}\n")
               fh.write(f"DEPLOY_HOME_DIR={home_dir}\n")
               fh.write(f"DEPLOY_PROJECT_DIR={project_dir}\n")
+              fh.write(f"DEPLOY_ENV_FILE={env_file}\n")
               fh.write(f"DEPLOY_SERVICE_UNITS_CSV={','.join(service_units)}\n")
               fh.write(f"DEPLOY_TARGET_PORT={port}\n")
               fh.write(f"DEPLOY_CUBE_VENV={cube_venv}\n")
@@ -198,6 +200,63 @@ jobs:
           cd "${CUBE_DIR}"
           source "${DEPLOY_CUBE_VENV}/bin/activate"
           python manage.py migrate mumble_fg --noinput
+          EOF
+
+      - name: Sync FG_PKI_PASSPHRASE into FG env (optional)
+        env:
+          FG_PKI_PASSPHRASE_SECRET: ${{ secrets.FG_PKI_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_ENV_FILE:-}" ]; then
+            echo "No env_file configured in deploy target; skipping FG_PKI_PASSPHRASE sync."
+            exit 0
+          fi
+          if [ -z "${FG_PKI_PASSPHRASE_SECRET:-}" ]; then
+            echo "FG_PKI_PASSPHRASE secret is empty." >&2
+            exit 1
+          fi
+
+          FG_PKI_PASSPHRASE_SECRET_B64="$(printf '%s' "${FG_PKI_PASSPHRASE_SECRET}" | base64 | tr -d '\n')"
+          ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "DEPLOY_ENV_FILE='${DEPLOY_ENV_FILE}' FG_PKI_PASSPHRASE_SECRET_B64='${FG_PKI_PASSPHRASE_SECRET_B64}' bash -s" <<'EOF'
+          set -euo pipefail
+          mkdir -p "$(dirname "${DEPLOY_ENV_FILE}")"
+
+          FG_PKI_PASSPHRASE="$(printf '%s' "${FG_PKI_PASSPHRASE_SECRET_B64}" | base64 -d)"
+          export FG_PKI_PASSPHRASE
+
+          python3 - <<'PY'
+          import os
+          import shlex
+          from pathlib import Path
+
+          env_path = Path(os.environ["DEPLOY_ENV_FILE"])
+          line = f"FG_PKI_PASSPHRASE={shlex.quote(os.environ['FG_PKI_PASSPHRASE'])}"
+
+          if env_path.exists():
+              lines = env_path.read_text(encoding="utf-8").splitlines()
+          else:
+              lines = []
+
+          filtered = []
+          replaced = False
+          for existing in lines:
+              if existing.startswith("FG_PKI_PASSPHRASE="):
+                  if not replaced:
+                      filtered.append(line)
+                      replaced = True
+                  continue
+              filtered.append(existing)
+
+          if not replaced:
+              if filtered and filtered[-1] != "":
+                  filtered.append("")
+              filtered.append("# Synced by mumble-fg deploy workflow")
+              filtered.append(line)
+
+          env_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+          env_path.chmod(0o600)
+          PY
           EOF
 
       - name: Restart host services (best effort)
