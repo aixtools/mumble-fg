@@ -19,3 +19,12 @@ class MumbleFgConfig(AppConfig):
             except Exception:
                 import logging
                 logging.getLogger('fg.crypto').info('BG public key not available at startup')
+
+        # FG PKI is optional; used to decrypt BG->FG key exports and other
+        # sensitive responses once 2-way comms are enabled.
+        try:
+            from fg import pki
+            if not pki.is_initialized():
+                pki.initialize()
+        except Exception:
+            pass

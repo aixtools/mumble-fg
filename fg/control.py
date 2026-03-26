@@ -17,6 +17,8 @@ from django.conf import settings
 from django.utils.timezone import now
 
 from fg.contracts import MurmurContract
+from fg import control_keyring
+from fg import pki as fg_pki
 from fgbg_common.snapshot import PilotSnapshot
 
 REQUEST_TIMEOUT_SECONDS = 5
@@ -50,11 +52,15 @@ def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
     if content_type_json:
         headers['Content-Type'] = 'application/json'
 
-    shared_secret = (
-        os.getenv('BG_PSK', '').strip()
-        or getattr(settings, 'BG_PSK', None)
-        or ''
-    ).strip()
+    # Prefer youngest session key in FG keyring (normal mode).
+    for key_id, secret in control_keyring.decrypt_active_keypairs(limit=1):
+        headers['X-BG-KEY-ID'] = str(key_id)
+        headers['X-FGBG-PSK'] = secret
+        headers['X-Murmur-Control-PSK'] = secret
+        return headers
+
+    # Fallback: bootstrap PSK (installation / break-glass only).
+    shared_secret = (os.getenv('BG_PSK', '').strip() or getattr(settings, 'BG_PSK', None) or '').strip()
     if shared_secret:
         headers['X-FGBG-PSK'] = shared_secret
         headers['X-Murmur-Control-PSK'] = shared_secret
@@ -92,6 +98,7 @@ def _request_json(
     payload: dict[str, Any] | None = None,
     requested_by: str | None = None,
     allow_not_found: bool = False,
+    sync_keys: bool = True,
 ) -> dict[str, Any]:
     url = f'{_control_base_url()}{path}'
     body = None
@@ -106,6 +113,7 @@ def _request_json(
     try:
         with urlopen(request, timeout=_control_timeout()) as response:
             raw = response.read()
+            response_headers = dict(response.headers.items())
     except HTTPError as exc:
         error_reason = str(exc.reason)
         try:
@@ -135,7 +143,38 @@ def _request_json(
     if status not in allowed_statuses:
         raise BgSyncError(str(result.get('message', 'control rejected request')))
 
+    if sync_keys:
+        _maybe_sync_key_from_response_headers(response_headers, requested_by=requested_by)
+
     return result
+
+
+def _maybe_sync_key_from_response_headers(headers: dict[str, str], *, requested_by: str | None) -> None:
+    key_id = str(headers.get('X-BG-KEY-ID') or '').strip()
+    if not key_id:
+        return
+    if control_keyring.has_key_id(key_id):
+        return
+    pem = fg_pki.public_key_pem()
+    if not pem:
+        return
+    try:
+        response = _request_json(
+            '/v1/control-keys/export',
+            method='POST',
+            payload={
+                'key_id': key_id,
+                'fg_public_key_pem': pem.decode('ascii'),
+            },
+            requested_by=requested_by,
+            sync_keys=False,
+        )
+    except Exception:
+        return
+    encrypted_secret = response.get('encrypted_secret')
+    if isinstance(encrypted_secret, str) and encrypted_secret:
+        response_key_id = response.get('key_id') or key_id
+        control_keyring.store_encrypted(key_id=str(response_key_id), secret_ciphertext_b64=encrypted_secret)
 
 
 def _post_json(path: str, payload: dict[str, Any], *, requested_by: str | None = None) -> dict[str, Any]:
@@ -210,6 +249,30 @@ class BgControlClient:
 
     def base_url(self) -> str:
         return _control_base_url()
+
+    def bootstrap_control_key(self, *, requested_by: str | None = None) -> str | None:
+        """Fetch the newest BG session key (encrypted to FG) and store it locally.
+
+        This is intended for initial installation / recovery when FG does not yet
+        have a usable session key. BG must still accept the bootstrap PSK for this
+        call to succeed.
+        """
+        pem = fg_pki.public_key_pem()
+        if not pem:
+            raise BgSyncError('FG public key is not configured (FG_PUBLIC_KEY_PATH)')
+        response = _post_json(
+            '/v1/control-keys/export',
+            {
+                'fg_public_key_pem': pem.decode('ascii'),
+            },
+            requested_by=requested_by,
+        )
+        encrypted_secret = response.get('encrypted_secret')
+        key_id = response.get('key_id')
+        if not (isinstance(encrypted_secret, str) and encrypted_secret and isinstance(key_id, str) and key_id):
+            raise BgSyncError('Control key export response did not include key_id/encrypted_secret')
+        control_keyring.store_encrypted(key_id=key_id, secret_ciphertext_b64=encrypted_secret)
+        return key_id
 
     def list_servers(self) -> list[dict[str, Any]]:
         response = _get_json('/v1/servers')

@@ -349,6 +349,28 @@ def append_access_rule_audit(
     )
 
 
+class ControlChannelKeyEntry(models.Model):
+    """FG-held copy of BG control session keys.
+
+    Stored encrypted (RSA-OAEP) to FG's public key so a Cube DB leak does not
+    reveal the plaintext control secret.
+    """
+
+    key_id = models.UUIDField(unique=True)
+    secret_ciphertext_b64 = models.TextField(
+        help_text='Base64 RSA ciphertext of the control secret (encrypted with FG public key).'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_control_channel_key_entry'
+        ordering = ['-created_at', '-id']
+
+    def __str__(self) -> str:
+        return str(self.key_id)
+
+
 __all__ = [
     'AccessRule',
     'AccessRuleAudit',
@@ -364,6 +386,7 @@ __all__ = [
     'MurmurModelResolver',
     'PilotSnapshotHash',
     'ResolvedMurmurModels',
+    'ControlChannelKeyEntry',
     'access_rule_snapshot',
     'append_access_rule_audit',
     'resolve_murmur_model',
