@@ -131,6 +131,9 @@ jobs:
             exit 1
           fi
 
+          # Remove stale editable-install .pyc files that may be owned by another user
+          find "${DEPLOY_CUBE_VENV}/lib" -path '*/__pycache__/__editable___mumble_fg*' -delete 2>/dev/null || true
+
           echo "[deploy] Installing mumble-fg into Cube venv from ${DEPLOY_PROJECT_DIR}"
           "${DEPLOY_CUBE_VENV}/bin/pip" install --quiet --no-deps -e "${DEPLOY_PROJECT_DIR}"
 
