@@ -112,6 +112,7 @@ jobs:
             --exclude '.pytest_cache/' \
             --exclude '.env' \
             --exclude '.venv/' \
+            --exclude '*.egg-info/' \
             -e "ssh -p ${DEPLOY_TARGET_PORT} -i ~/.ssh/deploy_key" \
             ./ "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}:${DEPLOY_PROJECT_DIR%/}/"
 

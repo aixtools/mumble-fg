@@ -1,18 +1,18 @@
-name: Deploy mumble-fg (Prod)
+name: Deploy mumble-fg (reusable)
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       deploy_target_name:
-        description: 'Secret name containing deploy target JSON'
-        required: false
-        default: 'CUBE_PROD_CUBE'
+        description: 'Name of the GitHub secret containing the deploy target JSON'
+        required: true
+        type: string
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      DEPLOY_TARGET_NAME: ${{ github.event.inputs.deploy_target_name || 'CUBE_PROD_CUBE' }}
+      DEPLOY_TARGET_NAME: ${{ inputs.deploy_target_name }}
 
     steps:
       - name: Checkout code
@@ -20,7 +20,7 @@ jobs:
 
       - name: Resolve deploy target
         env:
-          DEPLOY_TARGET_JSON: ${{ secrets[github.event.inputs.deploy_target_name || 'CUBE_PROD_CUBE'] }}
+          DEPLOY_TARGET_JSON: ${{ secrets[inputs.deploy_target_name] }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -89,9 +89,6 @@ jobs:
           project_dir = str(payload.get("project_dir", "")).strip()
           service_units = payload.get("service_units", [])
           port = str(payload.get("port", "22")).strip()
-          if not port:
-              port = "22"
-          cube_venv = str(payload.get("cube_venv", "")).strip()
 
           if not host:
               raise SystemExit(f"Secret {target_name} missing required field: host")
@@ -108,6 +105,8 @@ jobs:
           if not isinstance(service_units, list):
               raise SystemExit(f"Secret {target_name} field service_units must be a JSON list")
           service_units = [str(unit).strip() for unit in service_units if str(unit).strip()]
+
+          cube_venv = str(payload.get("cube_venv", "")).strip()
           if not cube_venv:
               cube_venv = f"{home_dir}/Cube/venv"
 
@@ -119,10 +118,10 @@ jobs:
           with github_env.open("a", encoding="utf-8") as fh:
               fh.write(f"DEPLOY_TARGET_HOST={host}\n")
               fh.write(f"DEPLOY_TARGET_USER={user}\n")
-              fh.write(f"DEPLOY_TARGET_PORT={port}\n")
               fh.write(f"DEPLOY_HOME_DIR={home_dir}\n")
               fh.write(f"DEPLOY_PROJECT_DIR={project_dir}\n")
               fh.write(f"DEPLOY_SERVICE_UNITS_CSV={','.join(service_units)}\n")
+              fh.write(f"DEPLOY_TARGET_PORT={port}\n")
               fh.write(f"DEPLOY_CUBE_VENV={cube_venv}\n")
           PY
 
@@ -161,9 +160,6 @@ jobs:
             echo "[bootstrap] mumble-fg already installed in Cube venv; skipping."
             exit 0
           fi
-
-          # Remove stale editable-install .pyc files that may be owned by another user
-          find "${DEPLOY_CUBE_VENV}/lib" -path '*/__pycache__/__editable___mumble_fg*' -delete 2>/dev/null || true
 
           echo "[bootstrap] Installing mumble-fg into Cube venv."
           "${DEPLOY_CUBE_VENV}/bin/pip" install --quiet -e "${DEPLOY_PROJECT_DIR}"
