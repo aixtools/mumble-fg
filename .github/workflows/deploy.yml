@@ -136,10 +136,14 @@ jobs:
           ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
             "DEPLOY_TARGET_USER='${DEPLOY_TARGET_USER}' bash -s" <<'EOF'
           set -euo pipefail
-          sudo mkdir -p /etc/mumble-fg/keys
-          sudo chmod 0755 /etc/mumble-fg
-          sudo chmod 0700 /etc/mumble-fg/keys
-          sudo chown -R "${DEPLOY_TARGET_USER}:${DEPLOY_TARGET_USER}" /etc/mumble-fg
+          if [ ! -d /etc/mumble-fg/keys ]; then
+            sudo mkdir -p /etc/mumble-fg/keys
+            sudo chmod 0755 /etc/mumble-fg
+            sudo chmod 0700 /etc/mumble-fg/keys
+            sudo chown -R "${DEPLOY_TARGET_USER}:${DEPLOY_TARGET_USER}" /etc/mumble-fg
+          else
+            echo "[preflight] /etc/mumble-fg/keys exists; skipping sudo."
+          fi
           EOF
 
       - name: Deploy code via rsync
