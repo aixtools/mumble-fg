@@ -18,6 +18,16 @@
 
         <div class="account-info-grid">
             <div class="info-item">
+                <span class="info-label">{% trans "Display Name" %}</span>
+                <span class="info-value" style="user-select: all;">
+                    {% if panel.display_name %}
+                        {{ panel.display_name }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </span>
+            </div>
+            <div class="info-item">
                 <span class="info-label">{% trans "Username" %}</span>
                 <span class="info-value" style="user-select: all;">
                     {% if panel.username_with_slot %}
