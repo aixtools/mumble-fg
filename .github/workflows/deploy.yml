@@ -259,6 +259,42 @@ jobs:
           PY
           EOF
 
+      - name: Ensure FG keypair exists (optional)
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_ENV_FILE:-}" ]; then
+            echo "No env_file configured in deploy target; skipping keypair ensure."
+            exit 0
+          fi
+
+          ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "DEPLOY_CUBE_VENV='${DEPLOY_CUBE_VENV}' DEPLOY_ENV_FILE='${DEPLOY_ENV_FILE}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          if [ -f /etc/mumble-fg/keys/private_key.pem ] && [ -f /etc/mumble-fg/keys/public_key.pem ]; then
+            echo "[keys] Keypair already exists; skipping ensure."
+            exit 0
+          fi
+
+          CUBE_DIR="$(dirname "${DEPLOY_CUBE_VENV}")"
+          if [ ! -f "${CUBE_DIR}/manage.py" ]; then
+            echo "[keys] manage.py not found at ${CUBE_DIR}" >&2
+            exit 1
+          fi
+
+          if [ -f "${DEPLOY_ENV_FILE}" ]; then
+            set -a
+            # shellcheck disable=SC1090
+            source "${DEPLOY_ENV_FILE}"
+            set +a
+          fi
+
+          cd "${CUBE_DIR}"
+          source "${DEPLOY_CUBE_VENV}/bin/activate"
+          echo "[keys] Generating/normalizing FG keypair under /etc/mumble-fg/keys"
+          python manage.py ensure_fg_keypair --key-dir /etc/mumble-fg/keys
+          EOF
+
       - name: Restart host services (best effort)
         run: |
           set -euo pipefail
