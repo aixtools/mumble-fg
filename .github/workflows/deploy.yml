@@ -166,6 +166,24 @@ jobs:
           echo "[bootstrap] mumble-fg installed."
           EOF
 
+      - name: Run migrations
+        run: |
+          set -euo pipefail
+          ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "DEPLOY_CUBE_VENV='${DEPLOY_CUBE_VENV}' bash -s" <<'EOF'
+          set -euo pipefail
+          CUBE_DIR="$(dirname "${DEPLOY_CUBE_VENV}")"
+
+          if [ ! -f "${CUBE_DIR}/manage.py" ]; then
+            echo "[migrate] manage.py not found at ${CUBE_DIR}; skipping migrations."
+            exit 0
+          fi
+
+          cd "${CUBE_DIR}"
+          source "${DEPLOY_CUBE_VENV}/bin/activate"
+          python manage.py migrate mumble_fg --noinput
+          EOF
+
       - name: Restart host services (best effort)
         run: |
           set -euo pipefail
