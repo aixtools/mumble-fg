@@ -14,6 +14,7 @@ from fg.models import (
     IgnoredMurmurGroup,
     MurmurInventorySnapshot,
 )
+from fg.group_mapping import effective_murmur_groups_for_user
 from fg.sidebar import SIDEBAR_ITEMS
 
 _NO_REDIS = dict(
@@ -256,3 +257,23 @@ class GroupMappingViewTest(TestCase):
         self.assertContains(response, 'command')
         self.assertContains(response, 'Load View')
         self.assertContains(response, 'Refresh From BG')
+
+
+class EffectiveMurmurGroupsMemberTest(TestCase):
+    databases = {'default', 'cube'}
+
+    def test_member_gets_member_group(self):
+        user = _make_member('memberuser')
+        groups = effective_murmur_groups_for_user(user)
+        self.assertIn('Member', groups)
+
+    def test_non_member_does_not_get_member_group(self):
+        user = User.objects.create_user('nonmember', password='pass')
+        UserProfile.objects.create(user=user, is_member=False)
+        groups = effective_murmur_groups_for_user(user)
+        self.assertNotIn('Member', groups)
+
+    def test_no_profile_does_not_get_member_group(self):
+        user = User.objects.create_user('noprofile', password='pass')
+        groups = effective_murmur_groups_for_user(user)
+        self.assertNotIn('Member', groups)
