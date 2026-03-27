@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import UserProfile
+from fg.group_mapping import effective_murmur_groups_for_user
 from fg.models import (
     CubeGroupMapping,
     IgnoredCubeGroup,
@@ -256,3 +257,31 @@ class GroupMappingViewTest(TestCase):
         self.assertContains(response, 'command')
         self.assertContains(response, 'Load View')
         self.assertContains(response, 'Refresh From BG')
+
+
+@override_settings(**_NO_REDIS)
+class EffectiveMurmurGroupsMemberTest(TestCase):
+    databases = {'default', 'cube'}
+
+    def test_is_member_user_gets_member_group(self):
+        user = User.objects.create_user('memberuser', password='pass')
+        UserProfile.objects.create(user=user, is_member=True)
+
+        groups = effective_murmur_groups_for_user(user)
+
+        self.assertIn('Member', groups)
+
+    def test_non_member_user_does_not_get_member_group(self):
+        user = User.objects.create_user('nonmember', password='pass')
+        UserProfile.objects.create(user=user, is_member=False)
+
+        groups = effective_murmur_groups_for_user(user)
+
+        self.assertNotIn('Member', groups)
+
+    def test_no_profile_does_not_get_member_group(self):
+        user = User.objects.create_user('noprofile', password='pass')
+
+        groups = effective_murmur_groups_for_user(user)
+
+        self.assertNotIn('Member', groups)

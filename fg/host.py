@@ -29,6 +29,9 @@ class GenericMurmurHostAdapter:
     def list_groups(self) -> list[Any]:
         return []
 
+    def user_is_member(self, user) -> bool:
+        return False
+
     def user_is_alliance_leader(self, user) -> bool:
         return False
 
@@ -51,6 +54,16 @@ class CubeMurmurHostAdapter(GenericMurmurHostAdapter):
         import accounts.models as accounts_models
 
         return accounts_models
+
+    def user_is_member(self, user) -> bool:
+        try:
+            accounts_models = self._accounts_models_module()
+        except ImportError:
+            return False
+        UserProfile = getattr(accounts_models, 'UserProfile', None)
+        if UserProfile is None:
+            return False
+        return UserProfile.objects.filter(user=user, is_member=True).exists()
 
     def get_main_character(self, user) -> Any | None:
         try:

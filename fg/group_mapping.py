@@ -58,7 +58,7 @@ def mapped_murmur_groups_for_cube_group(cube_group_name: str) -> list[str]:
     )
 
 
-def effective_murmur_groups_for_user(user, *, mumble_user=None) -> list[str]:
+def effective_murmur_groups_for_user(user, *, mumble_user=None, _config=None) -> list[str]:
     adapter = get_host_adapter()
     parts: list[str] = []
     main = adapter.get_main_character(user)
@@ -68,9 +68,15 @@ def effective_murmur_groups_for_user(user, *, mumble_user=None) -> list[str]:
         if getattr(main, 'corporation_name', None):
             parts.append(str(main.corporation_name).replace(' ', '_'))
 
-    ignored_cube = ignored_cube_group_names()
-    ignored_murmur = ignored_murmur_group_names()
-    mapping_by_group = mapping_rows_by_cube_group()
+    if adapter.user_is_member(user):
+        parts.append('Member')
+
+    if _config is not None:
+        ignored_cube, ignored_murmur, mapping_by_group = _config
+    else:
+        ignored_cube = ignored_cube_group_names()
+        ignored_murmur = ignored_murmur_group_names()
+        mapping_by_group = mapping_rows_by_cube_group()
 
     for membership in adapter.get_approved_group_memberships(user):
         cube_group_name = normalize_cube_group_name(getattr(getattr(membership, 'group', None), 'name', '') or '')
@@ -99,8 +105,12 @@ def effective_murmur_groups_for_user(user, *, mumble_user=None) -> list[str]:
     return deduped
 
 
-def effective_groups_csv_for_user(user, *, mumble_user=None) -> str:
-    return ','.join(effective_murmur_groups_for_user(user, mumble_user=mumble_user))
+def build_group_mapping_config():
+    return (ignored_cube_group_names(), ignored_murmur_group_names(), mapping_rows_by_cube_group())
+
+
+def effective_groups_csv_for_user(user, *, mumble_user=None, _config=None) -> str:
+    return ','.join(effective_murmur_groups_for_user(user, mumble_user=mumble_user, _config=_config))
 
 
 def user_has_mumble_admin_bypass(user) -> bool:

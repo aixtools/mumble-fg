@@ -34,6 +34,6 @@ def get_periodic_tasks():
         },
         'mumble_fg.periodic_group_sync': {
             'task': 'fg.tasks.update_all_mumble_groups',
-            'schedule': crontab(minute=0),
+            'schedule': crontab(minute='*/3'),
         },
     }
