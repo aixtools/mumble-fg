@@ -27,6 +27,7 @@
                     {% endif %}
                 </span>
             </div>
+        {% if panel.account %}
             <div class="info-item">
                 <span class="info-label">{% trans "Display Name" %}</span>
                 <span class="info-value" style="user-select: all;">
@@ -53,6 +54,7 @@
                 <span class="info-value">Yes</span>
             </div>
             {% endif %}
+        {% endif %}
             <div class="info-item">
                 <span class="info-label">{% trans "Address" %}</span>
                 <span class="info-value" style="user-select: all;">
@@ -75,6 +77,7 @@
             </div>
         </div>
 
+    {% if panel.account %}
         {% if panel.show_pilot_selector %}
             <div style="margin-top: 1rem;">
                 <label for="{{ panel.key }}-pilot-selector" class="info-label" style="display: block; margin-bottom: 0.35rem;">{% trans "Mumble Authentication" %}</label>
@@ -132,11 +135,22 @@
                 data-unavailable-label="{% trans 'BG unavailable' %}"
             >{% trans "Set Password" %}</button>
         </form>
+    {% else %}
+        {% if panel.display_name %}
+        <div style="margin-top: 0.75rem; color: var(--text-secondary); font-size: 0.9rem;">
+            {% trans "You will appear as" %} <strong style="color: var(--text-color);">{{ panel.display_name }}</strong>
+        </div>
+        {% endif %}
 
-        {% comment %}
-            This profile panel is shown only for ACL-eligible pilots.
-            Main appears first; explicitly allowed alts can be selected here.
-        {% endcomment %}
+        <div style="margin-top: 1rem;">
+            <form method="post" action="{% url 'mumble:activate' panel.server.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-outline btn-xs" style="color: var(--primary-color); border-color: var(--primary-color);">
+                    {% trans "Activate Mumble Account" %}
+                </button>
+            </form>
+        </div>
+    {% endif %}
     </div>
 </div>
 
