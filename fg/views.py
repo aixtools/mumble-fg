@@ -1569,20 +1569,25 @@ def _load_inventory_snapshot(server, *, refresh: bool = False):
     return local_snapshot, ''
 
 
-def _root_group_names(snapshot: MurmurInventorySnapshot | None) -> list[str]:
+def _inventory_group_names(snapshot: MurmurInventorySnapshot | None) -> list[str]:
     inventory = getattr(snapshot, 'inventory', {}) or {}
-    names = {
-        str(group.get('name') or '').strip()
-        for group in inventory.get('root_groups', [])
-        if str(group.get('name') or '').strip()
-    }
+    names = set()
+    for group in inventory.get('root_groups', []):
+        group_name = str(group.get('name') or '').strip()
+        if group_name:
+            names.add(group_name)
+    for channel in inventory.get('channels', []):
+        for group in channel.get('groups', []):
+            group_name = str(group.get('name') or '').strip()
+            if group_name:
+                names.add(group_name)
     return sorted(names, key=str.lower)
 
 
 def _divergence_rows(selected_server, selected_snapshot, servers):
     rows = []
     selected_inventory = getattr(selected_snapshot, 'inventory', {}) or {}
-    selected_root = set(_root_group_names(selected_snapshot))
+    selected_groups = set(_inventory_group_names(selected_snapshot))
     selected_summary = dict(selected_inventory.get('summary') or {})
     for server in servers:
         if selected_server is not None and server.pk == selected_server.pk:
@@ -1597,11 +1602,11 @@ def _divergence_rows(selected_server, selected_snapshot, servers):
             })
             continue
         inventory = snapshot.inventory or {}
-        root_names = set(_root_group_names(snapshot))
+        inventory_groups = set(_inventory_group_names(snapshot))
         summary = dict(inventory.get('summary') or {})
         reasons = []
-        if root_names != selected_root:
-            reasons.append('Root groups differ')
+        if inventory_groups != selected_groups:
+            reasons.append('Murmur groups differ')
         if summary != selected_summary:
             reasons.append('Channel/ACL summary differs')
         rows.append({
@@ -1614,9 +1619,10 @@ def _divergence_rows(selected_server, selected_snapshot, servers):
     return rows
 
 
-def _mapping_rows(selected_cube_group_name: str | None, available_root_groups: list[str]):
+def _mapping_rows(selected_cube_group_name: str | None, available_group_names: list[str]):
     mapped_names = mapped_murmur_groups_for_cube_group(selected_cube_group_name) if selected_cube_group_name else []
     mapped_name_set = set(mapped_names)
+    available_set = set(available_group_names)
     ignored_cube = ignored_cube_group_names()
     ignored_murmur = ignored_murmur_group_names()
 
@@ -1637,7 +1643,7 @@ def _mapping_rows(selected_cube_group_name: str | None, available_root_groups: l
         })
 
     available_rows = []
-    for group_name in available_root_groups:
+    for group_name in available_group_names:
         if group_name in mapped_name_set:
             continue
         reasons = []
@@ -1679,8 +1685,8 @@ def group_mapping(request):
     if selected_server is not None:
         snapshot, inventory_error = _load_inventory_snapshot(selected_server, refresh=False)
 
-    root_groups = _root_group_names(snapshot)
-    available_rows, mapped_rows = _mapping_rows(selected_cube_group_name, root_groups)
+    inventory_groups = _inventory_group_names(snapshot)
+    available_rows, mapped_rows = _mapping_rows(selected_cube_group_name, inventory_groups)
     cube_ignored = selected_cube_group_name in ignored_cube_group_names()
     divergence_rows = _divergence_rows(selected_server, snapshot, servers) if selected_server is not None else []
 

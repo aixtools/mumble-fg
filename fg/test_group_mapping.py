@@ -40,7 +40,8 @@ def _runtime_server(pk=1, name='Finland'):
     return SimpleNamespace(pk=pk, name=name, is_active=True, address='voice.example.com:64738')
 
 
-def _snapshot(server_id=1, server_name='Finland', *, root_groups=None):
+def _snapshot(server_id=1, server_name='Finland', *, root_groups=None, channel_groups=None):
+    groups = channel_groups or [{'name': 'ops'}, {'name': 'command'}]
     return MurmurInventorySnapshot(
         server_id=server_id,
         server_name=server_name,
@@ -49,6 +50,15 @@ def _snapshot(server_id=1, server_name='Finland', *, root_groups=None):
         fetched_at=timezone.now(),
         inventory={
             'root_groups': root_groups or [{'name': 'ops'}, {'name': 'command'}],
+            'channels': [
+                {
+                    'id': 0,
+                    'name': 'Root',
+                    'path': 'Root',
+                    'groups': groups,
+                    'acls': [],
+                }
+            ],
             'summary': {'channel_count': 1, 'acl_count': 2, 'group_count': 2},
         },
     )
@@ -220,3 +230,29 @@ class GroupMappingViewTest(TestCase):
         self.assertContains(response, 'Murmur group ignored')
         self.assertContains(response, 'Restore')
         self.assertNotContains(response, '<select name="server"', html=False)
+
+    def test_groups_view_uses_all_channel_groups_not_only_root_groups(self):
+        _grant_group_mapping_perm(self.user, 'view_group_mapping')
+        self._login()
+
+        with patch('fg.views.safe_list_servers', return_value=[_runtime_server()]), patch(
+            'fg.views.all_cube_group_names',
+            return_value=['Command'],
+        ), patch(
+            'fg.views._load_inventory_snapshot',
+            return_value=(
+                _snapshot(
+                    root_groups=[{'name': 'admin'}],
+                    channel_groups=[{'name': 'admin'}, {'name': 'ops'}, {'name': 'command'}],
+                ),
+                '',
+            ),
+        ):
+            response = self.client.get(reverse('mumble:group_mapping'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'admin')
+        self.assertContains(response, 'ops')
+        self.assertContains(response, 'command')
+        self.assertContains(response, 'Load View')
+        self.assertContains(response, 'Refresh From BG')

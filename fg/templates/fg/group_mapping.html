@@ -37,8 +37,11 @@
                     {% endfor %}
                 </select>
             </div>
-            <button type="submit" class="btn btn-outline btn-xs">{% trans "Load" %}</button>
+            <button type="submit" class="btn btn-outline btn-xs">{% trans "Load View" %}</button>
         </form>
+        <p style="margin: 0.75rem 0 0; color: var(--text-secondary); font-size: 0.92rem;">
+            {% trans "Load View switches the current server/group selection using FG's cached inventory. Refresh asks BG for a fresh live inventory for the selected server and updates the cache." %}
+        </p>
     </div>
 
     <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem;">
@@ -46,7 +49,7 @@
             {% csrf_token %}
             {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
             <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
-            <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping or not selected_server %}disabled{% endif %}>{% trans "Refresh" %}</button>
+            <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping or not selected_server %}disabled{% endif %}>{% trans "Refresh From BG" %}</button>
         </form>
         <form method="post" action="{% url 'mumble:group_mapping_toggle_cube_ignore' %}" style="margin: 0;">
             {% csrf_token %}
