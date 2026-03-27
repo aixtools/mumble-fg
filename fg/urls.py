@@ -23,6 +23,7 @@ urlpatterns = [
         views.sync_contract_registration,
         name='sync_contract_registration',
     ),
+    path('controls/', views.mumble_controls, name='controls'),
     path('acl/', views.acl_list, name='acl_list'),
     path('acl/search/', views.acl_search, name='acl_search'),
     path('acl/batch-create/', views.acl_batch_create, name='acl_batch_create'),

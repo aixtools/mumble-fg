@@ -1,14 +1,12 @@
 from django.utils.translation import gettext_lazy as _
 
 
-def _can_view_group_mapping(request):
+def _can_view_mumble_controls(request):
     if not request.user.is_authenticated:
         return False
-    from fg.group_mapping import user_has_mumble_admin_bypass
-
     return (
         request.user.is_superuser
-        or user_has_mumble_admin_bypass(request.user)
+        or request.user.has_perm('mumble_fg.view_accessrule')
         or request.user.has_perm('mumble_fg.view_group_mapping')
     )
 
@@ -30,10 +28,10 @@ def _can_manage_mumble(request):
 
 SIDEBAR_ITEMS = [
     {
-        'key': 'mumble_acl',
+        'key': 'mumble_controls',
         'parent_key': 'alliance',
-        'label': _('Mumble ACL'),
-        'url_name': 'mumble:acl_list',
+        'label': _('Mumble Controls'),
+        'url_name': 'mumble:controls',
         'icon_svg': (
             '<svg class="sidebar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" '
             'stroke="currentColor" stroke-width="2">'
@@ -44,10 +42,10 @@ SIDEBAR_ITEMS = [
             '</svg>'
         ),
         'priority': 56,
-        'active_paths': ['mumble-ui/acl'],
+        'active_paths': ['mumble-ui/controls', 'mumble-ui/acl', 'mumble-ui/group-mapping'],
         'requires_auth': True,
         'requires_member': True,
-        'visible': _can_view_acl,
+        'visible': _can_view_mumble_controls,
     },
     {
         'key': 'mumble_manage',
@@ -68,27 +66,5 @@ SIDEBAR_ITEMS = [
         'requires_auth': True,
         'requires_member': True,
         'visible': _can_manage_mumble,
-    },
-    {
-        'key': 'mumble_group_mapping',
-        'parent_key': 'alliance',
-        'label': _('Mumble Group Mapping'),
-        'url_name': 'mumble:group_mapping',
-        'icon_svg': (
-            '<svg class="sidebar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" '
-            'stroke="currentColor" stroke-width="2">'
-            '<rect x="3" y="4" width="7" height="7" rx="1"></rect>'
-            '<rect x="14" y="4" width="7" height="7" rx="1"></rect>'
-            '<rect x="3" y="13" width="7" height="7" rx="1"></rect>'
-            '<path d="M10 7.5h4"></path>'
-            '<path d="M6.5 11v2"></path>'
-            '<path d="M14 16.5H10"></path>'
-            '</svg>'
-        ),
-        'priority': 58,
-        'active_paths': ['mumble-ui/group-mapping'],
-        'requires_auth': True,
-        'requires_member': True,
-        'visible': _can_view_group_mapping,
     },
 ]

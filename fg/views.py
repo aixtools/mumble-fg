@@ -771,6 +771,29 @@ def _can_view_acl(user):
     return _has_acl_perm(user, 'view_accessrule')
 
 
+def _controls_tabs(user, active_key: str) -> list[dict[str, object]]:
+    tabs: list[dict[str, object]] = []
+    if _can_view_acl(user):
+        tabs.append(
+            {
+                'key': 'accessibility',
+                'label': _('Accessibility'),
+                'url': reverse('mumble:acl_list'),
+                'active': active_key == 'accessibility',
+            }
+        )
+    if _can_view_group_mapping(user):
+        tabs.append(
+            {
+                'key': 'groups',
+                'label': _('Groups'),
+                'url': reverse('mumble:group_mapping'),
+                'active': active_key == 'groups',
+            }
+        )
+    return tabs
+
+
 def _can_create_acl(user):
     return _can_view_acl(user) and _has_acl_perm(user, 'add_accessrule')
 
@@ -906,6 +929,15 @@ def _resolve_name_for_rule(rule):
 
 
 @login_required
+def mumble_controls(request):
+    if _can_view_acl(request.user):
+        return redirect('mumble:acl_list')
+    if _can_view_group_mapping(request.user):
+        return redirect('mumble:group_mapping')
+    return HttpResponseForbidden()
+
+
+@login_required
 def acl_list(request):
     if not _can_view_acl(request.user):
         return HttpResponseForbidden()
@@ -933,6 +965,7 @@ def acl_list(request):
 
     return render(request, 'fg/acl.html', {
         'rules': rules,
+        'controls_tabs': _controls_tabs(request.user, 'accessibility'),
         'can_create_acl': _can_create_acl(request.user),
         'can_change_acl': _can_change_acl(request.user),
         'can_delete_acl': _can_delete_acl(request.user),
@@ -1499,7 +1532,7 @@ def acl_delete(request, rule_id):
 
 
 def _group_mapping_admin_bypass(user):
-    return user_has_mumble_admin_bypass(user)
+    return user.is_superuser
 
 
 def _has_group_mapping_perm(user, codename: str) -> bool:
@@ -1653,6 +1686,7 @@ def group_mapping(request):
 
     return render(request, 'fg/group_mapping.html', {
         'servers': servers,
+        'controls_tabs': _controls_tabs(request.user, 'groups'),
         'selected_server': selected_server,
         'selected_cube_group_name': selected_cube_group_name,
         'cube_group_names': cube_group_names,

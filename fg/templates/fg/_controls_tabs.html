@@ -1,0 +1,13 @@
+{% load i18n %}
+
+{% if controls_tabs %}
+<div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 1rem;">
+    {% for tab in controls_tabs %}
+        <a
+            href="{{ tab.url }}"
+            class="btn btn-xs {% if tab.active %}btn-primary{% else %}btn-outline{% endif %}"
+            style="padding: 6px 14px; font-size: 12px;"
+        >{{ tab.label }}</a>
+    {% endfor %}
+</div>
+{% endif %}

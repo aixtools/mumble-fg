@@ -66,7 +66,7 @@ class GroupMappingViewTest(TestCase):
         self.client.force_login(self.user)
 
     def _sidebar_item(self):
-        return next(item for item in SIDEBAR_ITEMS if item['key'] == 'mumble_group_mapping')
+        return next(item for item in SIDEBAR_ITEMS if item['key'] == 'mumble_controls')
 
     def test_view_permission_controls_sidebar_and_page_access(self):
         request = self.factory.get('/')
@@ -89,13 +89,14 @@ class GroupMappingViewTest(TestCase):
             response = self.client.get(reverse('mumble:group_mapping'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Mumble Group Mapping')
+        self.assertContains(response, 'Mumble Controls')
+        self.assertContains(response, 'Groups')
 
-    def test_mumble_admin_bypass_controls_sidebar_and_page_access(self):
+    def test_mumble_admin_bypass_does_not_grant_group_mapping_access(self):
         request = self.factory.get('/')
         request.user = self.user
         with patch('fg.group_mapping.user_has_mumble_admin_bypass', return_value=True):
-            self.assertTrue(self._sidebar_item()['visible'](request))
+            self.assertFalse(self._sidebar_item()['visible'](request))
 
         self._login()
         with patch('fg.views.user_has_mumble_admin_bypass', return_value=True), patch(
@@ -107,7 +108,16 @@ class GroupMappingViewTest(TestCase):
         ):
             response = self.client.get(reverse('mumble:group_mapping'))
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 403)
+
+    def test_controls_route_redirects_to_groups_when_only_group_access_exists(self):
+        _grant_group_mapping_perm(self.user, 'view_group_mapping')
+        self._login()
+
+        response = self.client.get(reverse('mumble:controls'))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], reverse('mumble:group_mapping'))
 
     def test_refresh_stores_snapshot_from_bg(self):
         _grant_group_mapping_perm(self.user, 'view_group_mapping')

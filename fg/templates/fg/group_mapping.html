@@ -1,14 +1,15 @@
 {% extends 'base.html' %}
 {% load i18n %}
 
-{% block title %}{% trans "Mumble Group Mapping" %}{% endblock %}
+{% block title %}{% trans "Mumble Controls" %}{% endblock %}
 
 {% block content %}
 <div class="page-header" style="display: flex; align-items: center; gap: 12px;">
-    <h1 style="margin: 0;">{% trans "Mumble Group Mapping" %}</h1>
+    <h1 style="margin: 0;">{% trans "Mumble Controls" %}</h1>
 </div>
 
 <div style="padding: 0 2rem 2rem;">
+    {% include 'fg/_controls_tabs.html' %}
     <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem; margin-bottom: 1rem;">
         <form method="get" action="{% url 'mumble:group_mapping' %}" style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: end;">
             <div>
