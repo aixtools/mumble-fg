@@ -26,6 +26,9 @@ class GenericMurmurHostAdapter:
     def get_approved_group_memberships(self, user) -> list[Any]:
         return []
 
+    def list_groups(self) -> list[Any]:
+        return []
+
     def user_is_alliance_leader(self, user) -> bool:
         return False
 
@@ -70,6 +73,16 @@ class CubeMurmurHostAdapter(GenericMurmurHostAdapter):
         return list(
             GroupMembership.objects.filter(user=user, status='approved').select_related('group')
         )
+
+    def list_groups(self) -> list[Any]:
+        try:
+            accounts_models = self._accounts_models_module()
+        except ImportError:
+            return []
+        Group = getattr(accounts_models, 'Group', None)
+        if Group is None:
+            return []
+        return list(Group.objects.order_by('name'))
 
     def user_is_alliance_leader(self, user) -> bool:
         try:

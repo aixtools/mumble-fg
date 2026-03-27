@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.http import Http404, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.timezone import now
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 
@@ -29,13 +30,26 @@ from fgbg_common.entity_types import (
 
 from .acl_sync import sync_acl_rules_to_bg
 from .control import BgControlClient, BgSyncError
+from .group_mapping import (
+    all_cube_group_names,
+    effective_groups_csv_for_user,
+    ignored_cube_group_names,
+    ignored_murmur_group_names,
+    mapped_murmur_groups_for_cube_group,
+    store_inventory_snapshot,
+    user_has_mumble_admin_bypass,
+)
 from .host import get_host_adapter
 from .models import (
     ACL_AUDIT_ACTION_CREATE,
     ACL_AUDIT_ACTION_DELETE,
     ACL_AUDIT_ACTION_UPDATE,
     AccessRule,
+    CubeGroupMapping,
+    IgnoredCubeGroup,
+    IgnoredMurmurGroup,
     MumbleUser, MurmurModelLookupError, access_rule_snapshot, append_access_rule_audit,
+    MurmurInventorySnapshot,
     resolve_murmur_models,
 )
 from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers, safe_registration_inventory
@@ -241,18 +255,7 @@ def _compute_display_name(user):
 
 
 def _compute_groups(user, mumble_user=None):
-    parts = []
-    main = get_host_adapter().get_main_character(user)
-    if main:
-        if main.alliance_name:
-            parts.append(main.alliance_name.replace(' ', '_'))
-        if main.corporation_name:
-            parts.append(main.corporation_name.replace(' ', '_'))
-    for m in get_host_adapter().get_approved_group_memberships(user):
-        parts.append(m.group.name.replace(' ', '_'))
-    if mumble_user and mumble_user.is_mumble_admin:
-        parts.append('admin')
-    return ','.join(parts)
+    return effective_groups_csv_for_user(user, mumble_user=mumble_user)
 
 
 @require_POST
@@ -768,6 +771,29 @@ def _can_view_acl(user):
     return _has_acl_perm(user, 'view_accessrule')
 
 
+def _controls_tabs(user, active_key: str) -> list[dict[str, object]]:
+    tabs: list[dict[str, object]] = []
+    if _can_view_acl(user):
+        tabs.append(
+            {
+                'key': 'accessibility',
+                'label': _('Accessibility'),
+                'url': reverse('mumble:acl_list'),
+                'active': active_key == 'accessibility',
+            }
+        )
+    if _can_view_group_mapping(user):
+        tabs.append(
+            {
+                'key': 'groups',
+                'label': _('Groups'),
+                'url': reverse('mumble:group_mapping'),
+                'active': active_key == 'groups',
+            }
+        )
+    return tabs
+
+
 def _can_create_acl(user):
     return _can_view_acl(user) and _has_acl_perm(user, 'add_accessrule')
 
@@ -903,6 +929,15 @@ def _resolve_name_for_rule(rule):
 
 
 @login_required
+def mumble_controls(request):
+    if _can_view_acl(request.user):
+        return redirect('mumble:acl_list')
+    if _can_view_group_mapping(request.user):
+        return redirect('mumble:group_mapping')
+    return HttpResponseForbidden()
+
+
+@login_required
 def acl_list(request):
     if not _can_view_acl(request.user):
         return HttpResponseForbidden()
@@ -930,6 +965,7 @@ def acl_list(request):
 
     return render(request, 'fg/acl.html', {
         'rules': rules,
+        'controls_tabs': _controls_tabs(request.user, 'accessibility'),
         'can_create_acl': _can_create_acl(request.user),
         'can_change_acl': _can_change_acl(request.user),
         'can_delete_acl': _can_delete_acl(request.user),
@@ -1488,3 +1524,300 @@ def acl_delete(request, rule_id):
         _acl_sync_failure_message(request, exc)
     messages.success(request, _('ACL entry deleted.'))
     return redirect('mumble:acl_list')
+
+
+# ---------------------------------------------------------------------------
+# Cube Group -> Murmur Group Mapping
+# ---------------------------------------------------------------------------
+
+
+def _group_mapping_admin_bypass(user):
+    return user.is_superuser
+
+
+def _has_group_mapping_perm(user, codename: str) -> bool:
+    return user.is_authenticated and (
+        _group_mapping_admin_bypass(user)
+        or user.has_perm(f'mumble_fg.{codename}')
+    )
+
+
+def _can_view_group_mapping(user) -> bool:
+    return _has_group_mapping_perm(user, 'view_group_mapping')
+
+
+def _can_change_group_mapping(user) -> bool:
+    return _can_view_group_mapping(user) and _has_group_mapping_perm(user, 'change_group_mapping')
+
+
+def _snapshot_is_stale(snapshot: MurmurInventorySnapshot | None) -> bool:
+    if snapshot is None or snapshot.fetched_at is None:
+        return True
+    freshness_seconds = int(snapshot.freshness_seconds or 600)
+    return (now() - snapshot.fetched_at).total_seconds() >= freshness_seconds
+
+
+def _load_inventory_snapshot(server, *, refresh: bool = False):
+    local_snapshot = MurmurInventorySnapshot.objects.filter(server_id=server.pk).first()
+    if refresh or _snapshot_is_stale(local_snapshot):
+        try:
+            payload = _CONTROL_CLIENT.get_server_inventory(server.pk, refresh=refresh)
+        except BgSyncError as exc:
+            return local_snapshot, str(exc)
+        local_snapshot = store_inventory_snapshot(payload)
+        return local_snapshot, ''
+    return local_snapshot, ''
+
+
+def _inventory_group_names(snapshot: MurmurInventorySnapshot | None) -> list[str]:
+    inventory = getattr(snapshot, 'inventory', {}) or {}
+    names = set()
+    for group in inventory.get('root_groups', []):
+        group_name = str(group.get('name') or '').strip()
+        if group_name:
+            names.add(group_name)
+    for channel in inventory.get('channels', []):
+        for group in channel.get('groups', []):
+            group_name = str(group.get('name') or '').strip()
+            if group_name:
+                names.add(group_name)
+    return sorted(names, key=str.lower)
+
+
+def _divergence_rows(selected_server, selected_snapshot, servers):
+    rows = []
+    selected_inventory = getattr(selected_snapshot, 'inventory', {}) or {}
+    selected_groups = set(_inventory_group_names(selected_snapshot))
+    selected_summary = dict(selected_inventory.get('summary') or {})
+    for server in servers:
+        if selected_server is not None and server.pk == selected_server.pk:
+            continue
+        snapshot = MurmurInventorySnapshot.objects.filter(server_id=server.pk).first()
+        if snapshot is None:
+            rows.append({
+                'server_id': server.pk,
+                'server_label': server.name,
+                'state': 'missing',
+                'message': 'No imported snapshot',
+            })
+            continue
+        inventory = snapshot.inventory or {}
+        inventory_groups = set(_inventory_group_names(snapshot))
+        summary = dict(inventory.get('summary') or {})
+        reasons = []
+        if inventory_groups != selected_groups:
+            reasons.append('Murmur groups differ')
+        if summary != selected_summary:
+            reasons.append('Channel/ACL summary differs')
+        rows.append({
+            'server_id': server.pk,
+            'server_label': server.name,
+            'state': 'diverged' if reasons else 'aligned',
+            'message': '; '.join(reasons) if reasons else 'Aligned',
+            'fetched_at': snapshot.fetched_at,
+        })
+    return rows
+
+
+def _mapping_rows(selected_cube_group_name: str | None, available_group_names: list[str]):
+    mapped_names = mapped_murmur_groups_for_cube_group(selected_cube_group_name) if selected_cube_group_name else []
+    mapped_name_set = set(mapped_names)
+    available_set = set(available_group_names)
+    ignored_cube = ignored_cube_group_names()
+    ignored_murmur = ignored_murmur_group_names()
+
+    mapped_rows = []
+    for murmur_group_name in mapped_names:
+        reasons = []
+        if selected_cube_group_name in ignored_cube:
+            reasons.append('Cube group ignored')
+        if murmur_group_name in ignored_murmur:
+            reasons.append('Murmur group ignored')
+        if murmur_group_name not in available_set:
+            reasons.append('Missing on selected server')
+        mapped_rows.append({
+            'murmur_group_name': murmur_group_name,
+            'suppressed': bool(reasons),
+            'reason': '; '.join(reasons),
+            'is_ignored': murmur_group_name in ignored_murmur,
+        })
+
+    available_rows = []
+    for group_name in available_group_names:
+        if group_name in mapped_name_set:
+            continue
+        reasons = []
+        if group_name in ignored_murmur:
+            reasons.append('Murmur group ignored')
+        available_rows.append(
+            {
+                'murmur_group_name': group_name,
+                'is_ignored': group_name in ignored_murmur,
+                'suppressed': bool(reasons),
+                'reason': '; '.join(reasons),
+                'can_assign': not reasons,
+            }
+        )
+    return available_rows, mapped_rows
+
+
+@login_required
+def group_mapping(request):
+    if not _can_view_group_mapping(request.user):
+        return HttpResponseForbidden()
+
+    servers = [server for server in safe_list_servers() if server.is_active]
+    selected_server = None
+    selected_server_id = str(request.GET.get('server', '') or '').strip()
+    if servers:
+        if selected_server_id:
+            selected_server = next((server for server in servers if str(server.pk) == selected_server_id), None)
+        if selected_server is None:
+            selected_server = servers[0]
+
+    selected_cube_group_name = str(request.GET.get('group', '') or '').strip()
+    cube_group_names = all_cube_group_names()
+    if selected_cube_group_name not in cube_group_names:
+        selected_cube_group_name = cube_group_names[0] if cube_group_names else ''
+
+    snapshot = None
+    inventory_error = ''
+    if selected_server is not None:
+        snapshot, inventory_error = _load_inventory_snapshot(selected_server, refresh=False)
+
+    inventory_groups = _inventory_group_names(snapshot)
+    available_rows, mapped_rows = _mapping_rows(selected_cube_group_name, inventory_groups)
+    cube_ignored = selected_cube_group_name in ignored_cube_group_names()
+    divergence_rows = _divergence_rows(selected_server, snapshot, servers) if selected_server is not None else []
+
+    return render(request, 'fg/group_mapping.html', {
+        'servers': servers,
+        'controls_tabs': _controls_tabs(request.user, 'groups'),
+        'selected_server': selected_server,
+        'selected_cube_group_name': selected_cube_group_name,
+        'cube_group_names': cube_group_names,
+        'cube_group_is_ignored': cube_ignored,
+        'available_rows': available_rows,
+        'mapped_rows': mapped_rows,
+        'inventory_snapshot': snapshot,
+        'inventory_error': inventory_error,
+        'divergence_rows': divergence_rows,
+        'can_change_group_mapping': _can_change_group_mapping(request.user),
+    })
+
+
+def _redirect_group_mapping(request):
+    params = []
+    server_id = str(request.POST.get('server_id', '') or '').strip()
+    group_name = str(request.POST.get('cube_group_name', '') or '').strip()
+    if server_id:
+        params.append(f'server={server_id}')
+    if group_name:
+        params.append(f'group={group_name}')
+    suffix = f'?{"&".join(params)}' if params else ''
+    return redirect(f'{reverse("mumble:group_mapping")}{suffix}')
+
+
+@require_POST
+@login_required
+def group_mapping_refresh(request):
+    if not _can_change_group_mapping(request.user):
+        return HttpResponseForbidden()
+
+    server_id = str(request.POST.get('server_id', '') or '').strip()
+    server = next((item for item in safe_list_servers() if str(item.pk) == server_id), None)
+    if server is not None:
+        snapshot, error = _load_inventory_snapshot(server, refresh=True)
+        if snapshot is not None and not error:
+            messages.success(request, _('Murmur inventory refreshed from BG.'))
+        else:
+            messages.warning(request, _('Murmur inventory refresh failed: %(error)s') % {'error': error or 'unknown'})
+    return _redirect_group_mapping(request)
+
+
+@require_POST
+@login_required
+def group_mapping_add(request):
+    if not _can_change_group_mapping(request.user):
+        return HttpResponseForbidden()
+
+    cube_group_name = str(request.POST.get('cube_group_name', '') or '').strip()
+    murmur_group_name = str(request.POST.get('murmur_group_name', '') or '').strip()
+    if cube_group_name and murmur_group_name:
+        CubeGroupMapping.objects.get_or_create(
+            cube_group_name=cube_group_name,
+            murmur_group_name=murmur_group_name,
+        )
+        messages.success(request, _('Group mapping added.'))
+    return _redirect_group_mapping(request)
+
+
+@require_POST
+@login_required
+def group_mapping_remove(request):
+    if not _can_change_group_mapping(request.user):
+        return HttpResponseForbidden()
+
+    cube_group_name = str(request.POST.get('cube_group_name', '') or '').strip()
+    murmur_group_name = str(request.POST.get('murmur_group_name', '') or '').strip()
+    CubeGroupMapping.objects.filter(
+        cube_group_name=cube_group_name,
+        murmur_group_name=murmur_group_name,
+    ).delete()
+    messages.success(request, _('Group mapping removed.'))
+    return _redirect_group_mapping(request)
+
+
+@require_POST
+@login_required
+def group_mapping_toggle_cube_ignore(request):
+    if not _can_change_group_mapping(request.user):
+        return HttpResponseForbidden()
+
+    cube_group_name = str(request.POST.get('cube_group_name', '') or '').strip()
+    existing = IgnoredCubeGroup.objects.filter(cube_group_name=cube_group_name).first()
+    if existing is None:
+        IgnoredCubeGroup.objects.create(cube_group_name=cube_group_name)
+        messages.success(request, _('Cube group ignored.'))
+    else:
+        existing.delete()
+        messages.success(request, _('Cube group restored.'))
+    return _redirect_group_mapping(request)
+
+
+@require_POST
+@login_required
+def group_mapping_toggle_murmur_ignore(request):
+    if not _can_change_group_mapping(request.user):
+        return HttpResponseForbidden()
+
+    murmur_group_name = str(request.POST.get('murmur_group_name', '') or '').strip()
+    existing = IgnoredMurmurGroup.objects.filter(murmur_group_name=murmur_group_name).first()
+    if existing is None:
+        IgnoredMurmurGroup.objects.create(murmur_group_name=murmur_group_name)
+        messages.success(request, _('Murmur group ignored.'))
+    else:
+        existing.delete()
+        messages.success(request, _('Murmur group restored.'))
+    return _redirect_group_mapping(request)
+
+
+@require_POST
+@login_required
+def group_mapping_cleanup_ignored(request):
+    if not _can_change_group_mapping(request.user):
+        return HttpResponseForbidden()
+
+    ignored_cube = ignored_cube_group_names()
+    ignored_murmur = ignored_murmur_group_names()
+    deleted, _detail = CubeGroupMapping.objects.filter(
+        cube_group_name__in=ignored_cube,
+    ).delete()
+    deleted2, _detail2 = CubeGroupMapping.objects.filter(
+        murmur_group_name__in=ignored_murmur,
+    ).delete()
+    messages.success(
+        request,
+        _('Removed %(count)s ignored mapping row(s).') % {'count': int(deleted) + int(deleted2)},
+    )
+    return _redirect_group_mapping(request)

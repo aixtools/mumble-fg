@@ -1,5 +1,15 @@
 from django.utils.translation import gettext_lazy as _
 
+
+def _can_view_mumble_controls(request):
+    if not request.user.is_authenticated:
+        return False
+    return (
+        request.user.is_superuser
+        or request.user.has_perm('mumble_fg.view_accessrule')
+        or request.user.has_perm('mumble_fg.view_group_mapping')
+    )
+
 def _can_view_acl(request):
     if not request.user.is_authenticated:
         return False
@@ -18,10 +28,10 @@ def _can_manage_mumble(request):
 
 SIDEBAR_ITEMS = [
     {
-        'key': 'mumble_acl',
+        'key': 'mumble_controls',
         'parent_key': 'alliance',
-        'label': _('Mumble ACL'),
-        'url_name': 'mumble:acl_list',
+        'label': _('Mumble Controls'),
+        'url_name': 'mumble:controls',
         'icon_svg': (
             '<svg class="sidebar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" '
             'stroke="currentColor" stroke-width="2">'
@@ -32,10 +42,10 @@ SIDEBAR_ITEMS = [
             '</svg>'
         ),
         'priority': 56,
-        'active_paths': ['mumble-ui/acl'],
+        'active_paths': ['mumble-ui/controls', 'mumble-ui/acl', 'mumble-ui/group-mapping'],
         'requires_auth': True,
         'requires_member': True,
-        'visible': _can_view_acl,
+        'visible': _can_view_mumble_controls,
     },
     {
         'key': 'mumble_manage',

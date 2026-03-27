@@ -1483,7 +1483,7 @@ class ProfilePanelProviderTest(TestCase):
         panels = build_profile_panels(request)
 
         panel = next(panel for panel in panels if panel['server'].pk == self.server1.pk)
-        self.assertTrue(panel['is_admin'])
+        self.assertTrue(panel['is_mumble_admin'])
 
     def test_panel_prefers_computed_display_name(self):
         EveAllianceInfo.objects.create(

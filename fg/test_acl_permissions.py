@@ -54,7 +54,7 @@ class ACLPermissionViewTest(TestCase):
         self.client.force_login(self.user)
 
     def _sidebar_item(self):
-        return next(item for item in SIDEBAR_ITEMS if item['key'] == 'mumble_acl')
+        return next(item for item in SIDEBAR_ITEMS if item['key'] == 'mumble_controls')
 
     def test_view_permission_controls_sidebar_and_page_access(self):
         request = self.factory.get('/')
@@ -69,6 +69,9 @@ class ACLPermissionViewTest(TestCase):
         self.user = User.objects.get(pk=self.user.pk)
         request.user = self.user
         self.assertTrue(self._sidebar_item()['visible'](request))
+
+        response = self.client.get(reverse('mumble:controls'))
+        self.assertRedirects(response, reverse('mumble:acl_list'))
 
         with patch('fg.views._resolve_name_for_rule', return_value='Resolved Name'):
             response = self.client.get(reverse('mumble:acl_list'))
