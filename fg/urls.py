@@ -32,4 +32,11 @@ urlpatterns = [
     path('acl/<int:rule_id>/toggle-deny/', views.acl_toggle_deny, name='acl_toggle_deny'),
     path('acl/<int:rule_id>/toggle-admin/', views.acl_toggle_admin, name='acl_toggle_admin'),
     path('acl/<int:rule_id>/delete/', views.acl_delete, name='acl_delete'),
+    path('group-mapping/', views.group_mapping, name='group_mapping'),
+    path('group-mapping/refresh/', views.group_mapping_refresh, name='group_mapping_refresh'),
+    path('group-mapping/add/', views.group_mapping_add, name='group_mapping_add'),
+    path('group-mapping/remove/', views.group_mapping_remove, name='group_mapping_remove'),
+    path('group-mapping/toggle-cube-ignore/', views.group_mapping_toggle_cube_ignore, name='group_mapping_toggle_cube_ignore'),
+    path('group-mapping/toggle-murmur-ignore/', views.group_mapping_toggle_murmur_ignore, name='group_mapping_toggle_murmur_ignore'),
+    path('group-mapping/cleanup-ignored/', views.group_mapping_cleanup_ignored, name='group_mapping_cleanup_ignored'),
 ]

@@ -281,6 +281,16 @@ class BgControlClient:
             raise BgSyncError('Server probe response did not include servers')
         return [server for server in servers if isinstance(server, dict)]
 
+    def get_server_inventory(self, server_id: int, *, refresh: bool = False) -> dict[str, Any]:
+        path = f'/v1/servers/{int(server_id)}/inventory'
+        if refresh:
+            path = f'{path}?refresh=1'
+        response = _get_json(path)
+        inventory = response.get('inventory')
+        if not isinstance(inventory, dict):
+            raise BgSyncError('Server inventory response did not include inventory')
+        return response
+
     def list_registrations(self) -> list[dict[str, Any]]:
         response = _get_json('/v1/registrations')
         registrations = response.get('registrations')

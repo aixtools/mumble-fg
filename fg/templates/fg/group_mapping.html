@@ -1,0 +1,189 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Mumble Group Mapping" %}{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display: flex; align-items: center; gap: 12px;">
+    <h1 style="margin: 0;">{% trans "Mumble Group Mapping" %}</h1>
+</div>
+
+<div style="padding: 0 2rem 2rem;">
+    <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem; margin-bottom: 1rem;">
+        <form method="get" action="{% url 'mumble:group_mapping' %}" style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: end;">
+            <div>
+                <label style="display: block; margin-bottom: 0.35rem;">{% trans "Server" %}</label>
+                {% if servers|length > 1 %}
+                    <select name="server" style="min-width: 16rem; padding: 0.45rem 0.6rem;">
+                        {% for server in servers %}
+                            <option value="{{ server.pk }}"{% if selected_server and server.pk == selected_server.pk %} selected{% endif %}>{{ server.name }}</option>
+                        {% endfor %}
+                    </select>
+                {% else %}
+                    <div style="padding: 0.45rem 0.6rem; border: 1px solid var(--border-color); border-radius: 4px; min-width: 16rem;">
+                        {% if selected_server %}{{ selected_server.name }}{% else %}{% trans "BG unavailable" %}{% endif %}
+                    </div>
+                    {% if selected_server %}
+                        <input type="hidden" name="server" value="{{ selected_server.pk }}">
+                    {% endif %}
+                {% endif %}
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 0.35rem;">{% trans "Cube Group" %}</label>
+                <select name="group" style="min-width: 16rem; padding: 0.45rem 0.6rem;">
+                    {% for group_name in cube_group_names %}
+                        <option value="{{ group_name }}"{% if group_name == selected_cube_group_name %} selected{% endif %}>{{ group_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn btn-outline btn-xs">{% trans "Load" %}</button>
+        </form>
+    </div>
+
+    <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem;">
+        <form method="post" action="{% url 'mumble:group_mapping_refresh' %}" style="margin: 0;">
+            {% csrf_token %}
+            {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+            <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
+            <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping or not selected_server %}disabled{% endif %}>{% trans "Refresh" %}</button>
+        </form>
+        <form method="post" action="{% url 'mumble:group_mapping_toggle_cube_ignore' %}" style="margin: 0;">
+            {% csrf_token %}
+            {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+            <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
+            <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping or not selected_cube_group_name %}disabled{% endif %}>
+                {% if cube_group_is_ignored %}{% trans "Restore Cube Group" %}{% else %}{% trans "Ignore Cube Group" %}{% endif %}
+            </button>
+        </form>
+        <form method="post" action="{% url 'mumble:group_mapping_cleanup_ignored' %}" style="margin: 0;">
+            {% csrf_token %}
+            {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+            <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
+            <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping %}disabled{% endif %}>{% trans "Cleanup Ignored Mappings" %}</button>
+        </form>
+    </div>
+
+    {% if inventory_error %}
+        <div style="background: rgba(230,126,34,0.12); border: 1px solid rgba(230,126,34,0.4); color: #e67e22; border-radius: 6px; padding: 0.75rem; margin-bottom: 1rem;">
+            {{ inventory_error }}
+        </div>
+    {% endif %}
+
+    <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem; margin-bottom: 1rem;">
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+            <div><strong>{% trans "Server" %}:</strong> {% if selected_server %}{{ selected_server.name }}{% else %}{% trans "BG unavailable" %}{% endif %}</div>
+            <div><strong>{% trans "Freshness" %}:</strong> {% if inventory_snapshot and inventory_snapshot.fetched_at %}{{ inventory_snapshot.fetched_at|date:"Y-m-d H:i:s" }}{% else %}-{% endif %}</div>
+            <div><strong>{% trans "Real-Time" %}:</strong> {% if inventory_snapshot and inventory_snapshot.is_real_time %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</div>
+            <div><strong>{% trans "Cube Group" %}:</strong> {{ selected_cube_group_name|default:"-" }}</div>
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 1rem;">
+        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem;">
+            <h3 style="margin-top: 0;">{% trans "Available Murmur Groups" %}</h3>
+            {% if available_rows %}
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tbody>
+                    {% for row in available_rows %}
+                        <tr style="border-bottom: 1px solid var(--border-color); opacity: {% if row.suppressed %}0.55{% else %}1{% endif %};">
+                            <td style="padding: 0.45rem 0;">
+                                <div>{{ row.murmur_group_name }}</div>
+                                {% if row.reason %}
+                                    <div style="font-size: 12px; color: var(--text-secondary);">{{ row.reason }}</div>
+                                {% endif %}
+                            </td>
+                            <td style="padding: 0.45rem 0; text-align: right;">
+                                <form method="post" action="{% url 'mumble:group_mapping_add' %}" style="display: inline;">
+                                    {% csrf_token %}
+                                    {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+                                    <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
+                                    <input type="hidden" name="murmur_group_name" value="{{ row.murmur_group_name }}">
+                                    <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping or not selected_cube_group_name or not row.can_assign %}disabled{% endif %}>{% trans "Assign" %}</button>
+                                </form>
+                                <form method="post" action="{% url 'mumble:group_mapping_toggle_murmur_ignore' %}" style="display: inline;">
+                                    {% csrf_token %}
+                                    {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+                                    <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
+                                    <input type="hidden" name="murmur_group_name" value="{{ row.murmur_group_name }}">
+                                    <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping %}disabled{% endif %}>
+                                        {% if row.is_ignored %}{% trans "Restore" %}{% else %}{% trans "Ignore" %}{% endif %}
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p style="margin: 0; color: var(--text-secondary);">{% trans "No active Murmur groups available for assignment." %}</p>
+            {% endif %}
+        </div>
+
+        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem;">
+            <h3 style="margin-top: 0;">{% trans "Mapped Murmur Groups" %}</h3>
+            {% if mapped_rows %}
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tbody>
+                    {% for row in mapped_rows %}
+                        <tr style="border-bottom: 1px solid var(--border-color); opacity: {% if row.suppressed %}0.55{% else %}1{% endif %};">
+                            <td style="padding: 0.45rem 0;">
+                                <div>{{ row.murmur_group_name }}</div>
+                                {% if row.reason %}
+                                    <div style="font-size: 12px; color: var(--text-secondary);">{{ row.reason }}</div>
+                                {% endif %}
+                            </td>
+                            <td style="padding: 0.45rem 0; text-align: right;">
+                                <form method="post" action="{% url 'mumble:group_mapping_remove' %}" style="display: inline;">
+                                    {% csrf_token %}
+                                    {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+                                    <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
+                                    <input type="hidden" name="murmur_group_name" value="{{ row.murmur_group_name }}">
+                                    <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping %}disabled{% endif %}>{% trans "Remove" %}</button>
+                                </form>
+                                <form method="post" action="{% url 'mumble:group_mapping_toggle_murmur_ignore' %}" style="display: inline;">
+                                    {% csrf_token %}
+                                    {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+                                    <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
+                                    <input type="hidden" name="murmur_group_name" value="{{ row.murmur_group_name }}">
+                                    <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping %}disabled{% endif %}>
+                                        {% if row.is_ignored %}{% trans "Restore" %}{% else %}{% trans "Ignore" %}{% endif %}
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p style="margin: 0; color: var(--text-secondary);">{% trans "No mappings for this Cube group." %}</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem; margin-top: 1rem;">
+        <h3 style="margin-top: 0;">{% trans "Server Divergence" %}</h3>
+        {% if divergence_rows %}
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <th style="text-align: left; padding: 0.45rem 0;">{% trans "Server" %}</th>
+                        <th style="text-align: left; padding: 0.45rem 0;">{% trans "State" %}</th>
+                        <th style="text-align: left; padding: 0.45rem 0;">{% trans "Details" %}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for row in divergence_rows %}
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <td style="padding: 0.45rem 0;">{{ row.server_label }}</td>
+                        <td style="padding: 0.45rem 0;">{{ row.state }}</td>
+                        <td style="padding: 0.45rem 0;">{{ row.message }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p style="margin: 0; color: var(--text-secondary);">{% trans "No other servers available for comparison." %}</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

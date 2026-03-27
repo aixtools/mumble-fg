@@ -305,6 +305,76 @@ class PilotSnapshotHash(models.Model):
         return f'{self.pkid}:{self.pilot_data_hash}'
 
 
+class CubeGroupMapping(models.Model):
+    cube_group_name = models.CharField(max_length=255)
+    murmur_group_name = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_cube_group_mapping'
+        ordering = ['cube_group_name', 'murmur_group_name']
+        default_permissions = ()
+        permissions = [
+            ('view_group_mapping', 'Can view Cube-to-Murmur group mappings'),
+            ('change_group_mapping', 'Can change Cube-to-Murmur group mappings'),
+            ('add_group_mapping', 'Can add Cube-to-Murmur group mappings'),
+            ('delete_group_mapping', 'Can delete Cube-to-Murmur group mappings'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['cube_group_name', 'murmur_group_name'],
+                name='fg_cube_group_mapping_unique_pair',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.cube_group_name} -> {self.murmur_group_name}'
+
+
+class IgnoredCubeGroup(models.Model):
+    cube_group_name = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_ignored_cube_group'
+        ordering = ['cube_group_name']
+
+    def __str__(self) -> str:
+        return self.cube_group_name
+
+
+class IgnoredMurmurGroup(models.Model):
+    murmur_group_name = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_ignored_murmur_group'
+        ordering = ['murmur_group_name']
+
+    def __str__(self) -> str:
+        return self.murmur_group_name
+
+
+class MurmurInventorySnapshot(models.Model):
+    server_id = models.PositiveIntegerField(unique=True)
+    server_name = models.CharField(max_length=255, blank=True, default='')
+    freshness_seconds = models.PositiveIntegerField(default=600)
+    is_real_time = models.BooleanField(default=False)
+    fetched_at = models.DateTimeField(null=True, blank=True)
+    inventory = models.JSONField(blank=True, default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_murmur_inventory_snapshot'
+        ordering = ['server_id']
+
+    def __str__(self) -> str:
+        return f'{self.server_id}:{self.server_name}'
+
+
 def append_access_rule_audit(
     *,
     action: str,
@@ -378,10 +448,14 @@ __all__ = [
     'ACL_AUDIT_ACTION_DELETE',
     'ACL_AUDIT_ACTION_SYNC',
     'ACL_AUDIT_ACTION_UPDATE',
+    'CubeGroupMapping',
     'ENTITY_TYPE_ALLIANCE',
     'ENTITY_TYPE_CORPORATION',
     'ENTITY_TYPE_PILOT',
+    'IgnoredCubeGroup',
+    'IgnoredMurmurGroup',
     'MumbleUser',
+    'MurmurInventorySnapshot',
     'MurmurModelLookupError',
     'MurmurModelResolver',
     'PilotSnapshotHash',

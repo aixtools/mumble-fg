@@ -18,6 +18,16 @@
 
         <div class="account-info-grid">
             <div class="info-item">
+                <span class="info-label">{% trans "Server" %}</span>
+                <span class="info-value" style="user-select: all;">
+                    {% if panel.server_label %}
+                        {{ panel.server_label }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </span>
+            </div>
+            <div class="info-item">
                 <span class="info-label">{% trans "Display Name" %}</span>
                 <span class="info-value" style="user-select: all;">
                     {% if panel.display_name %}
@@ -37,7 +47,7 @@
                     {% endif %}
                 </span>
             </div>
-            {% if panel.is_admin %}
+            {% if panel.is_mumble_admin %}
             <div class="info-item">
                 <span class="info-label">{% trans "IsAdmin" %}</span>
                 <span class="info-value">Yes</span>
