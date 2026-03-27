@@ -17,7 +17,7 @@
                 {% if servers|length > 1 %}
                     <select name="server" style="min-width: 16rem; padding: 0.45rem 0.6rem;">
                         {% for server in servers %}
-                            <option value="{{ server.pk }}"{% if selected_server and server.pk == selected_server.pk %} selected{% endif %}>{{ server.name }}</option>
+                            <option value="{{ server.server_key }}"{% if selected_server and server.server_key == selected_server.server_key %} selected{% endif %}>{{ server.name }}</option>
                         {% endfor %}
                     </select>
                 {% else %}
@@ -25,7 +25,7 @@
                         {% if selected_server %}{{ selected_server.name }}{% else %}{% trans "BG unavailable" %}{% endif %}
                     </div>
                     {% if selected_server %}
-                        <input type="hidden" name="server" value="{{ selected_server.pk }}">
+                        <input type="hidden" name="server" value="{{ selected_server.server_key }}">
                     {% endif %}
                 {% endif %}
             </div>
@@ -47,13 +47,13 @@
     <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem;">
         <form method="post" action="{% url 'mumble:group_mapping_refresh' %}" style="margin: 0;">
             {% csrf_token %}
-            {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+            {% if selected_server %}<input type="hidden" name="server" value="{{ selected_server.server_key }}">{% endif %}
             <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
             <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping or not selected_server %}disabled{% endif %}>{% trans "Refresh From BG" %}</button>
         </form>
         <form method="post" action="{% url 'mumble:group_mapping_toggle_cube_ignore' %}" style="margin: 0;">
             {% csrf_token %}
-            {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+            {% if selected_server %}<input type="hidden" name="server" value="{{ selected_server.server_key }}">{% endif %}
             <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
             <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping or not selected_cube_group_name %}disabled{% endif %}>
                 {% if cube_group_is_ignored %}{% trans "Restore Cube Group" %}{% else %}{% trans "Ignore Cube Group" %}{% endif %}
@@ -61,7 +61,7 @@
         </form>
         <form method="post" action="{% url 'mumble:group_mapping_cleanup_ignored' %}" style="margin: 0;">
             {% csrf_token %}
-            {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+            {% if selected_server %}<input type="hidden" name="server" value="{{ selected_server.server_key }}">{% endif %}
             <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
             <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping %}disabled{% endif %}>{% trans "Cleanup Ignored Mappings" %}</button>
         </form>
@@ -99,14 +99,14 @@
                             <td style="padding: 0.45rem 0; text-align: right;">
                                 <form method="post" action="{% url 'mumble:group_mapping_add' %}" style="display: inline;">
                                     {% csrf_token %}
-                                    {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+                                    {% if selected_server %}<input type="hidden" name="server" value="{{ selected_server.server_key }}">{% endif %}
                                     <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
                                     <input type="hidden" name="murmur_group_name" value="{{ row.murmur_group_name }}">
                                     <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping or not selected_cube_group_name or not row.can_assign %}disabled{% endif %}>{% trans "Assign" %}</button>
                                 </form>
                                 <form method="post" action="{% url 'mumble:group_mapping_toggle_murmur_ignore' %}" style="display: inline;">
                                     {% csrf_token %}
-                                    {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+                                    {% if selected_server %}<input type="hidden" name="server" value="{{ selected_server.server_key }}">{% endif %}
                                     <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
                                     <input type="hidden" name="murmur_group_name" value="{{ row.murmur_group_name }}">
                                     <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping %}disabled{% endif %}>
@@ -139,14 +139,14 @@
                             <td style="padding: 0.45rem 0; text-align: right;">
                                 <form method="post" action="{% url 'mumble:group_mapping_remove' %}" style="display: inline;">
                                     {% csrf_token %}
-                                    {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+                                    {% if selected_server %}<input type="hidden" name="server" value="{{ selected_server.server_key }}">{% endif %}
                                     <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
                                     <input type="hidden" name="murmur_group_name" value="{{ row.murmur_group_name }}">
                                     <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping %}disabled{% endif %}>{% trans "Remove" %}</button>
                                 </form>
                                 <form method="post" action="{% url 'mumble:group_mapping_toggle_murmur_ignore' %}" style="display: inline;">
                                     {% csrf_token %}
-                                    {% if selected_server %}<input type="hidden" name="server_id" value="{{ selected_server.pk }}">{% endif %}
+                                    {% if selected_server %}<input type="hidden" name="server" value="{{ selected_server.server_key }}">{% endif %}
                                     <input type="hidden" name="cube_group_name" value="{{ selected_cube_group_name }}">
                                     <input type="hidden" name="murmur_group_name" value="{{ row.murmur_group_name }}">
                                     <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_group_mapping %}disabled{% endif %}>

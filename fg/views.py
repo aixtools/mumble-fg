@@ -1550,6 +1550,17 @@ def _can_change_group_mapping(user) -> bool:
     return _can_view_group_mapping(user) and _has_group_mapping_perm(user, 'change_group_mapping')
 
 
+def _server_selector_value(server) -> str:
+    return str(getattr(server, 'server_key', '') or '').strip()
+
+
+def _resolve_server_from_selector(servers, selector: str):
+    normalized = str(selector or '').strip()
+    if not normalized:
+        return None
+    return next((server for server in servers if _server_selector_value(server) == normalized), None)
+
+
 def _snapshot_is_stale(snapshot: MurmurInventorySnapshot | None) -> bool:
     if snapshot is None or snapshot.fetched_at is None:
         return True
@@ -1558,10 +1569,10 @@ def _snapshot_is_stale(snapshot: MurmurInventorySnapshot | None) -> bool:
 
 
 def _load_inventory_snapshot(server, *, refresh: bool = False):
-    local_snapshot = MurmurInventorySnapshot.objects.filter(server_id=server.pk).first()
+    local_snapshot = MurmurInventorySnapshot.objects.filter(server_key=_server_selector_value(server)).first()
     if refresh or _snapshot_is_stale(local_snapshot):
         try:
-            payload = _CONTROL_CLIENT.get_server_inventory(server.pk, refresh=refresh)
+            payload = _CONTROL_CLIENT.get_server_inventory(_server_selector_value(server), refresh=refresh)
         except BgSyncError as exc:
             return local_snapshot, str(exc)
         local_snapshot = store_inventory_snapshot(payload)
@@ -1592,10 +1603,10 @@ def _divergence_rows(selected_server, selected_snapshot, servers):
     for server in servers:
         if selected_server is not None and server.pk == selected_server.pk:
             continue
-        snapshot = MurmurInventorySnapshot.objects.filter(server_id=server.pk).first()
+        snapshot = MurmurInventorySnapshot.objects.filter(server_key=_server_selector_value(server)).first()
         if snapshot is None:
             rows.append({
-                'server_id': server.pk,
+                'server_key': _server_selector_value(server),
                 'server_label': server.name,
                 'state': 'missing',
                 'message': 'No imported snapshot',
@@ -1668,10 +1679,10 @@ def group_mapping(request):
 
     servers = [server for server in safe_list_servers() if server.is_active]
     selected_server = None
-    selected_server_id = str(request.GET.get('server', '') or '').strip()
+    selected_server_selector = str(request.GET.get('server', '') or '').strip()
     if servers:
-        if selected_server_id:
-            selected_server = next((server for server in servers if str(server.pk) == selected_server_id), None)
+        if selected_server_selector:
+            selected_server = _resolve_server_from_selector(servers, selected_server_selector)
         if selected_server is None:
             selected_server = servers[0]
 
@@ -1708,10 +1719,14 @@ def group_mapping(request):
 
 def _redirect_group_mapping(request):
     params = []
-    server_id = str(request.POST.get('server_id', '') or '').strip()
+    server_selector = str(
+        request.POST.get('server', '')
+        or request.POST.get('server_key', '')
+        or ''
+    ).strip()
     group_name = str(request.POST.get('cube_group_name', '') or '').strip()
-    if server_id:
-        params.append(f'server={server_id}')
+    if server_selector:
+        params.append(f'server={server_selector}')
     if group_name:
         params.append(f'group={group_name}')
     suffix = f'?{"&".join(params)}' if params else ''
@@ -1724,8 +1739,12 @@ def group_mapping_refresh(request):
     if not _can_change_group_mapping(request.user):
         return HttpResponseForbidden()
 
-    server_id = str(request.POST.get('server_id', '') or '').strip()
-    server = next((item for item in safe_list_servers() if str(item.pk) == server_id), None)
+    server_selector = str(
+        request.POST.get('server', '')
+        or request.POST.get('server_key', '')
+        or ''
+    ).strip()
+    server = _resolve_server_from_selector(safe_list_servers(), server_selector)
     if server is not None:
         snapshot, error = _load_inventory_snapshot(server, refresh=True)
         if snapshot is not None and not error:
