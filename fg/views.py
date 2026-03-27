@@ -300,7 +300,7 @@ def activate(request, server_id):
 
     # Request initial password from BG (BG generates it).
     try:
-        password, _ = _sync_password(mumble_user)
+        password, _murmur_userid = _sync_password(mumble_user)
         request.session['murmur_temp_password'] = password
     except BgSyncError:
         logger.warning('Initial password request failed for new registration on server=%s', server.pk)
