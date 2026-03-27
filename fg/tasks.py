@@ -1,10 +1,12 @@
 import logging
 
 from .acl_sync import sync_acl_rules_to_bg
+from .control import BgControlClient, BgSyncError
 from .models import MumbleUser
 from .views import _compute_display_name, _compute_groups
 
 logger = logging.getLogger(__name__)
+_CONTROL_CLIENT = BgControlClient()
 
 
 def update_mumble_groups(mumble_user_id):
@@ -30,6 +32,18 @@ def update_mumble_groups(mumble_user_id):
             'Updated MumbleUser %s (pk=%s): %s',
             mumble_user.username, mumble_user_id, ', '.join(changed_fields),
         )
+        if 'groups' in changed_fields:
+            try:
+                _CONTROL_CLIENT.sync_live_admin_membership(
+                    mumble_user,
+                    requested_by='fg.periodic_group_update',
+                )
+            except BgSyncError:
+                logger.warning(
+                    'Failed to sync groups to BG for MumbleUser %s (pk=%s)',
+                    mumble_user.username, mumble_user_id,
+                    exc_info=True,
+                )
 
 
 def update_all_mumble_groups():
