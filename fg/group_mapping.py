@@ -68,6 +68,9 @@ def effective_murmur_groups_for_user(user, *, mumble_user=None) -> list[str]:
         if getattr(main, 'corporation_name', None):
             parts.append(str(main.corporation_name).replace(' ', '_'))
 
+    if adapter.user_is_member(user):
+        parts.append('Member')
+
     ignored_cube = ignored_cube_group_names()
     ignored_murmur = ignored_murmur_group_names()
     mapping_by_group = mapping_rows_by_cube_group()
