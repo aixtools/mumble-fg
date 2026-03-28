@@ -1422,7 +1422,7 @@ class TasksTest(TestCase):
 
         mock_client = BgControlClient()
         mock_client.list_servers = lambda: [{'id': 1, 'name': 'Finland', 'address': 'voice.example.com:64738', 'is_active': True}]
-        mock_client.list_registrations = lambda: [{'user_id': self.user.pk, 'server_id': 1, 'server_name': 'Finland', 'username': 'Test_Pilot', 'display_name': 'Test Pilot', 'is_active': True, 'is_mumble_admin': False, 'groups': '', 'hashfn': '', 'active_session_ids': []}]
+        mock_client.list_registrations = lambda: [{'pkid': self.user.pk, 'server_id': 1, 'server_name': 'Finland', 'username': 'Test_Pilot', 'display_name': 'Test Pilot', 'is_active': True, 'is_mumble_admin': False, 'groups': '', 'hashfn': '', 'active_session_ids': []}]
 
         with patch('fg.tasks.get_active_bg_clients', return_value=[mock_client]), \
              patch.object(mock_client, 'sync_live_admin_membership') as mock_sync:

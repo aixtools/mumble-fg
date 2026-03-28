@@ -25,25 +25,6 @@ def serialize_acl_rules() -> list[dict[str, Any]]:
     return [serialize_acl_rule(rule) for rule in AccessRule.objects.order_by('entity_type', 'entity_id')]
 
 
-def _sync_to_single_bg(
-    client: BgControlClient,
-    rules: list[dict[str, Any]],
-    pilot_snapshot: dict[str, Any],
-    *,
-    requested_by: str,
-    reconcile: bool,
-    provision_server_id: int | None,
-) -> dict[str, Any]:
-    return client.sync_access_rules(
-        rules,
-        requested_by=requested_by,
-        is_super=True,
-        pilot_snapshot=pilot_snapshot,
-        reconcile=reconcile,
-        server_id=provision_server_id,
-    )
-
-
 def sync_acl_rules_to_bg(
     *,
     requested_by: str,
@@ -71,11 +52,13 @@ def sync_acl_rules_to_bg(
             'bg_endpoint': control_url,
         }
         try:
-            response = _sync_to_single_bg(
-                client, rules, pilot_snapshot,
+            response = client.sync_access_rules(
+                rules,
                 requested_by=requested_by,
+                is_super=True,
+                pilot_snapshot=pilot_snapshot,
                 reconcile=reconcile,
-                provision_server_id=provision_server_id,
+                server_id=provision_server_id,
             )
         except (BgSyncError, PilotSnapshotError) as exc:
             metadata.update({

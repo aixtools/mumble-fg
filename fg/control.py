@@ -269,7 +269,8 @@ class BgControlClient:
 
     def __init__(self, *, base_url: str | None = None, psk: str | None = None):
         self._base_url = base_url.rstrip('/') if base_url else None
-        self._psk = psk or None
+        stripped_psk = str(psk or '').strip()
+        self._psk = stripped_psk or None
 
     def base_url(self) -> str:
         return self._base_url or _control_base_url()
