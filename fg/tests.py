@@ -1404,7 +1404,6 @@ class TasksTest(TestCase):
         update_mumble_groups(99999)  # should not raise
 
     def test_update_all_mumble_groups_discovers_from_bg(self):
-        from fg.control import BgControlClient
         from fg.runtime import RuntimeRegistration, RuntimeServer
         from fg.tasks import update_all_mumble_groups
 
@@ -1420,12 +1419,12 @@ class TasksTest(TestCase):
         )
         registration.user = self.user
 
-        mock_client = BgControlClient()
-        mock_client.list_servers = lambda: [{'id': 1, 'name': 'Finland', 'address': 'voice.example.com:64738', 'is_active': True}]
-        mock_client.list_registrations = lambda: [{'pkid': self.user.pk, 'server_id': 1, 'server_name': 'Finland', 'username': 'Test_Pilot', 'display_name': 'Test Pilot', 'is_active': True, 'is_mumble_admin': False, 'groups': '', 'hashfn': '', 'active_session_ids': []}]
-
-        with patch('fg.tasks.get_active_bg_clients', return_value=[mock_client]), \
-             patch.object(mock_client, 'sync_live_admin_membership') as mock_sync:
+        mock_service = SimpleNamespace(
+            list_registrations=lambda **kw: [registration],
+            attach_users=lambda regs: regs,
+        )
+        with patch('fg.tasks.get_runtime_service', return_value=mock_service), \
+             patch('fg.tasks._CONTROL_CLIENT.sync_live_admin_membership') as mock_sync:
             update_all_mumble_groups()
 
         mock_sync.assert_called_once()

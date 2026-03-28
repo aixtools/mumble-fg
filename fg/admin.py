@@ -20,7 +20,7 @@ from .models import (
     access_rule_snapshot,
     append_access_rule_audit,
 )
-from .models import BgEndpoint, MurmurModelLookupError, resolve_murmur_models
+from .models import MurmurModelLookupError, resolve_murmur_models
 
 
 def _get_eve_character_model():
@@ -647,10 +647,3 @@ class AccessRuleAuditAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
-
-
-@admin.register(BgEndpoint)
-class BgEndpointAdmin(admin.ModelAdmin):
-    list_display = ('name', 'url', 'is_active', 'updated_at')
-    list_filter = ('is_active',)
-    search_fields = ('name', 'url')

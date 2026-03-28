@@ -441,34 +441,9 @@ class ControlChannelKeyEntry(models.Model):
         return str(self.key_id)
 
 
-class BgEndpoint(models.Model):
-    """Registry of mumble-bg control endpoints that FG syncs with."""
-
-    name = models.CharField(max_length=255, unique=True)
-    url = models.URLField(max_length=500)
-    psk = models.CharField(
-        max_length=500,
-        blank=True,
-        default='',
-        help_text='Per-endpoint PSK. If blank, falls back to global BG_PSK.',
-    )
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'fg_bg_endpoint'
-        ordering = ['name']
-
-    def __str__(self) -> str:
-        status = 'active' if self.is_active else 'inactive'
-        return f'{self.name} ({status})'
-
-
 __all__ = [
     'AccessRule',
     'AccessRuleAudit',
-    'BgEndpoint',
     'ACL_AUDIT_ACTION_CREATE',
     'ACL_AUDIT_ACTION_DELETE',
     'ACL_AUDIT_ACTION_SYNC',

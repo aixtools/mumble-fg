@@ -86,18 +86,18 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     def _active_servers(self):
         return safe_list_servers()
 
-    def _accounts_by_server(self, user_id: int) -> dict[str, Any]:
+    def _accounts_by_server(self, user_id: int) -> dict[int, Any]:
         try:
             local = {
-                str(getattr(mu.server, 'name', '') or mu.server_id): mu
-                for mu in MumbleUser.objects.filter(user_id=user_id).select_related('server')
+                mumble_user.server_id: mumble_user
+                for mumble_user in MumbleUser.objects.filter(user_id=user_id).select_related('server')
             }
             if local:
                 return local
         except MurmurModelLookupError:
             pass
         return {
-            str(getattr(registration.server, 'name', '') or registration.server_id): registration
+            registration.server_id: registration
             for registration in safe_pilot_registrations(user_id, servers=self._active_servers())
         }
 
@@ -242,8 +242,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         accounts_by_server = self._accounts_by_server(target_user_id)
         descriptors: list[MurmurPanelDescriptor] = []
         for server in servers:
-            server_key = str(getattr(server, 'name', '') or server.pk)
-            account = accounts_by_server.get(server_key)
+            account = accounts_by_server.get(server.pk)
             descriptors.append(
                 self._panel_descriptor(
                     request=request,

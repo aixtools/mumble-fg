@@ -224,47 +224,34 @@ def get_runtime_service() -> BgRuntimeService:
     return _RUNTIME_SERVICE
 
 
-def get_all_runtime_services() -> list[BgRuntimeService]:
-    """Return a BgRuntimeService per active BG endpoint."""
-    from fg.control import get_active_bg_clients
-    return [BgRuntimeService(client=c) for c in get_active_bg_clients()]
-
-
 def safe_list_servers() -> list[RuntimeServer]:
-    all_servers: list[RuntimeServer] = []
-    for service in get_all_runtime_services():
-        try:
-            all_servers.extend(service.list_servers())
-        except BgSyncError as exc:
-            logger.warning('Failed to load BG server inventory from %s: %s', service._client.base_url(), exc)
-    return all_servers
+    try:
+        return get_runtime_service().list_servers()
+    except BgSyncError as exc:
+        logger.warning('Failed to load BG server inventory: %s', exc)
+        return []
 
 
 def safe_pilot_registrations(pkid: int, *, servers: list[RuntimeServer] | None = None) -> list[RuntimeRegistration]:
-    all_registrations: list[RuntimeRegistration] = []
-    for service in get_all_runtime_services():
-        try:
-            all_registrations.extend(service.registrations_for_pilot(pkid))
-        except BgSyncError as exc:
-            logger.warning('Failed to load BG registrations for pkid=%s from %s: %s', pkid, service._client.base_url(), exc)
-    return all_registrations
+    try:
+        return get_runtime_service().registrations_for_pilot(pkid, servers=servers)
+    except BgSyncError as exc:
+        logger.warning('Failed to load BG registrations for pkid=%s: %s', pkid, exc)
+        return []
 
 
 def safe_registration_inventory(*, servers: list[RuntimeServer] | None = None) -> list[RuntimeRegistration]:
-    all_registrations: list[RuntimeRegistration] = []
-    for service in get_all_runtime_services():
-        try:
-            all_registrations.extend(service.list_registrations())
-        except BgSyncError as exc:
-            logger.warning('Failed to load BG registration inventory from %s: %s', service._client.base_url(), exc)
-    return all_registrations
+    try:
+        return get_runtime_service().list_registrations(servers=servers)
+    except BgSyncError as exc:
+        logger.warning('Failed to load BG registration inventory: %s', exc)
+        return []
 
 
 __all__ = [
     'BgRuntimeService',
     'RuntimeRegistration',
     'RuntimeServer',
-    'get_all_runtime_services',
     'get_runtime_service',
     'safe_list_servers',
     'safe_pilot_registrations',

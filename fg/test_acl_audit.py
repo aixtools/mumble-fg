@@ -12,7 +12,7 @@ from django.urls import reverse
 from accounts.models import UserProfile
 from fg.acl_sync import sync_acl_rules_to_bg
 from fg.admin import AccessRuleAdmin
-from fg.control import BgControlClient, BgSyncError
+from fg.control import BgSyncError
 from fg.models import (
     ACL_AUDIT_ACTION_CREATE,
     ACL_AUDIT_ACTION_DELETE,
@@ -50,13 +50,6 @@ class ACLAuditTest(TestCase):
         self.factory = RequestFactory()
         self.admin_site = AdminSite()
         self.admin = AccessRuleAdmin(AccessRule, self.admin_site)
-        self.mock_bg_client = BgControlClient()
-        bg_clients_patcher = patch(
-            'fg.acl_sync.get_active_bg_clients',
-            return_value=[self.mock_bg_client],
-        )
-        bg_clients_patcher.start()
-        self.addCleanup(bg_clients_patcher.stop)
         pilot_snapshot = patch(
             'fg.acl_sync.serialize_pilot_snapshot',
             return_value={'generated_at': '2026-03-20T00:00:00Z', 'accounts': []},
@@ -64,7 +57,7 @@ class ACLAuditTest(TestCase):
         self.mock_serialize_pilot_snapshot = pilot_snapshot.start()
         self.addCleanup(pilot_snapshot.stop)
 
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 1, 'updated': 0, 'deleted': 0})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 1, 'updated': 0, 'deleted': 0})
     def test_batch_create_logs_audit_entry(self, mock_sync_access_rules):
         _grant_acl_perm(self.user, 'view_accessrule')
         _grant_acl_perm(self.user, 'add_accessrule')
@@ -93,7 +86,7 @@ class ACLAuditTest(TestCase):
         self.assertEqual(sync_audit.metadata['trigger'], 'implicit')
         self.assertEqual(sync_audit.metadata['sync_status'], 'completed')
 
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
     def test_toggle_logs_previous_snapshot(self, mock_sync_access_rules):
         _grant_acl_perm(self.user, 'view_accessrule')
         _grant_acl_perm(self.user, 'change_accessrule')
@@ -113,7 +106,7 @@ class ACLAuditTest(TestCase):
         self.assertEqual(sync_audit.acl_id, rule.pk)
         self.assertEqual(sync_audit.metadata['trigger'], 'implicit')
 
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 0, 'created': 0, 'updated': 0, 'deleted': 1})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 0, 'created': 0, 'updated': 0, 'deleted': 1})
     def test_delete_logs_snapshot_before_rule_removal(self, mock_sync_access_rules):
         _grant_acl_perm(self.user, 'view_accessrule')
         _grant_acl_perm(self.user, 'delete_accessrule')
@@ -152,7 +145,7 @@ class ACLAuditTest(TestCase):
         with self.assertRaises(RuntimeError):
             audit.delete()
 
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 1, 'updated': 0, 'deleted': 0})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 1, 'updated': 0, 'deleted': 0})
     def test_admin_batch_create_logs_audit_entry(self, mock_sync_access_rules):
         admin_user = User.objects.create_superuser('acladmin', 'admin@example.com', 'pass')
         request = self.factory.post(
@@ -178,7 +171,7 @@ class ACLAuditTest(TestCase):
         self.assertEqual(sync_audit.source, 'admin_batch_create_sync')
         self.assertEqual(sync_audit.metadata['trigger'], 'implicit')
 
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
     def test_admin_save_model_logs_update_snapshot(self, mock_sync_access_rules):
         admin_user = User.objects.create_superuser('acladmin2', 'admin2@example.com', 'pass')
         rule = AccessRule.objects.create(
@@ -203,7 +196,7 @@ class ACLAuditTest(TestCase):
         self.assertEqual(sync_audit.source, 'admin_changeform_sync')
         self.assertEqual(sync_audit.metadata['trigger'], 'implicit')
 
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
     def test_manual_sync_logs_audit_entry(self, mock_sync_access_rules):
         _grant_acl_perm(self.user, 'view_accessrule')
         _grant_acl_perm(self.user, 'change_accessrule')
@@ -217,7 +210,7 @@ class ACLAuditTest(TestCase):
         self.assertEqual(audit.actor_username, self.user.username)
         self.assertEqual(audit.metadata['trigger'], 'manual')
 
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
     def test_manual_sync_ajax_returns_json(self, mock_sync_access_rules):
         _grant_acl_perm(self.user, 'view_accessrule')
         _grant_acl_perm(self.user, 'change_accessrule')
@@ -258,7 +251,7 @@ class ACLAuditTest(TestCase):
             ],
         },
     )
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
     def test_sync_acl_rules_to_bg_defaults_to_reconcile_and_sends_snapshot(
         self,
         mock_sync_access_rules,
@@ -297,8 +290,8 @@ class ACLAuditTest(TestCase):
         self.assertEqual(data['error'], 'BG unavailable')
         self.assertTrue(data['bg_unavailable'])
 
-    @patch.object(BgControlClient, 'base_url', return_value='http://monitor.aixtools.org:18080')
-    @patch.object(BgControlClient, 'sync_access_rules', side_effect=BgSyncError('Control endpoint unreachable: [Errno 111] Connection refused'))
+    @patch('fg.acl_sync._CONTROL_CLIENT.base_url', return_value='http://monitor.aixtools.org:18080')
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', side_effect=BgSyncError('Control endpoint unreachable: [Errno 111] Connection refused'))
     def test_sync_failure_logs_control_url_and_audits_it(self, mock_sync_access_rules, mock_base_url):
         AccessRule.objects.create(entity_id=123456, entity_type='pilot', deny=False, note='seed')
 
@@ -321,7 +314,7 @@ class ACLAuditTest(TestCase):
         self.assertEqual(audit.metadata['sync_status'], 'failed')
         self.assertEqual(audit.metadata['control_url'], 'http://monitor.aixtools.org:18080')
 
-    @patch.object(BgControlClient, 'sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
+    @patch('fg.acl_sync._CONTROL_CLIENT.sync_access_rules', return_value={'status': 'completed', 'total': 1, 'created': 0, 'updated': 1, 'deleted': 0})
     def test_periodic_command_logs_audit_entry(self, mock_sync_access_rules):
         AccessRule.objects.create(entity_id=123456, entity_type='pilot', deny=False, note='seed')
         out = StringIO()

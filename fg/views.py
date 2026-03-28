@@ -401,25 +401,17 @@ def _profile_password_action_response(request):
     if mapped_pkid is not None:
         target_pkid = mapped_pkid
 
-    # Send password to all BG endpoints — user may have registrations on multiple servers
-    from .control import get_active_bg_clients
-    response = None
-    failed_endpoints: list[str] = []
-    last_error = None
-    for client in get_active_bg_clients():
-        try:
-            response = client.reset_password_for_user(
-                user=request.user,
-                password=password,
-                pkid=target_pkid,
-                requested_by=str(request.user.get_username() or 'unknown'),
-            )
-        except (BgSyncError, TimeoutError, OSError) as exc:
-            logger.warning('Profile password action failed for user=%s on %s: %s', request.user.pk, client.base_url(), exc)
-            failed_endpoints.append(client.base_url())
-            last_error = exc
-    if response is None and last_error is not None:
-        bg_unavailable = _bg_unavailable_error(last_error)
+    # Send password directly to BG — BG owns registrations
+    try:
+        response = _CONTROL_CLIENT.reset_password_for_user(
+            user=request.user,
+            password=password,
+            pkid=target_pkid,
+            requested_by=str(request.user.get_username() or 'unknown'),
+        )
+    except BgSyncError as exc:
+        logger.warning('Profile password action failed for user=%s: %s', request.user.pk, exc)
+        bg_unavailable = _bg_unavailable_error(exc)
         inactive_message = _('Mumble account inactive, try again later.')
         if is_ajax:
             if bg_unavailable:
@@ -434,13 +426,11 @@ def _profile_password_action_response(request):
         messages.warning(request, _('BG unavailable') if bg_unavailable else inactive_message)
         return redirect('profile')
 
-    resolved_password = response.get('password') if response else None
+    resolved_password = response.get('password')
     if password is not None:
         msg = _('Murmur password updated.')
     else:
         msg = _('Murmur password has been reset.')
-    if failed_endpoints:
-        msg = str(msg) + ' ' + str(_('Warning: some servers did not update (%s).') % ', '.join(failed_endpoints))
 
     if is_ajax:
         payload = {'status': 'ok', 'message': str(msg)}
