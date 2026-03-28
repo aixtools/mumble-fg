@@ -231,27 +231,33 @@ def get_all_runtime_services() -> list[BgRuntimeService]:
 
 
 def safe_list_servers() -> list[RuntimeServer]:
-    try:
-        return get_runtime_service().list_servers()
-    except BgSyncError as exc:
-        logger.warning('Failed to load BG server inventory: %s', exc)
-        return []
+    all_servers: list[RuntimeServer] = []
+    for service in get_all_runtime_services():
+        try:
+            all_servers.extend(service.list_servers())
+        except BgSyncError as exc:
+            logger.warning('Failed to load BG server inventory from %s: %s', service._client.base_url(), exc)
+    return all_servers
 
 
 def safe_pilot_registrations(pkid: int, *, servers: list[RuntimeServer] | None = None) -> list[RuntimeRegistration]:
-    try:
-        return get_runtime_service().registrations_for_pilot(pkid, servers=servers)
-    except BgSyncError as exc:
-        logger.warning('Failed to load BG registrations for pkid=%s: %s', pkid, exc)
-        return []
+    all_registrations: list[RuntimeRegistration] = []
+    for service in get_all_runtime_services():
+        try:
+            all_registrations.extend(service.registrations_for_pilot(pkid, servers=servers))
+        except BgSyncError as exc:
+            logger.warning('Failed to load BG registrations for pkid=%s from %s: %s', pkid, service._client.base_url(), exc)
+    return all_registrations
 
 
 def safe_registration_inventory(*, servers: list[RuntimeServer] | None = None) -> list[RuntimeRegistration]:
-    try:
-        return get_runtime_service().list_registrations(servers=servers)
-    except BgSyncError as exc:
-        logger.warning('Failed to load BG registration inventory: %s', exc)
-        return []
+    all_registrations: list[RuntimeRegistration] = []
+    for service in get_all_runtime_services():
+        try:
+            all_registrations.extend(service.list_registrations(servers=servers))
+        except BgSyncError as exc:
+            logger.warning('Failed to load BG registration inventory from %s: %s', service._client.base_url(), exc)
+    return all_registrations
 
 
 __all__ = [
