@@ -404,6 +404,7 @@ def _profile_password_action_response(request):
     # Send password to all BG endpoints — user may have registrations on multiple servers
     from .control import get_active_bg_clients
     response = None
+    failed_endpoints: list[str] = []
     last_error = None
     for client in get_active_bg_clients():
         try:
@@ -415,6 +416,7 @@ def _profile_password_action_response(request):
             )
         except (BgSyncError, TimeoutError, OSError) as exc:
             logger.warning('Profile password action failed for user=%s on %s: %s', request.user.pk, client.base_url(), exc)
+            failed_endpoints.append(client.base_url())
             last_error = exc
     if response is None and last_error is not None:
         bg_unavailable = _bg_unavailable_error(last_error)
@@ -432,11 +434,13 @@ def _profile_password_action_response(request):
         messages.warning(request, _('BG unavailable') if bg_unavailable else inactive_message)
         return redirect('profile')
 
-    resolved_password = response.get('password')
+    resolved_password = response.get('password') if response else None
     if password is not None:
         msg = _('Murmur password updated.')
     else:
         msg = _('Murmur password has been reset.')
+    if failed_endpoints:
+        msg = str(msg) + ' ' + str(_('Warning: some servers did not update (%s).') % ', '.join(failed_endpoints))
 
     if is_ajax:
         payload = {'status': 'ok', 'message': str(msg)}
