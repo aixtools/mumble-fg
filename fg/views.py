@@ -413,7 +413,7 @@ def _profile_password_action_response(request):
                 pkid=target_pkid,
                 requested_by=str(request.user.get_username() or 'unknown'),
             )
-        except BgSyncError as exc:
+        except (BgSyncError, TimeoutError, OSError) as exc:
             logger.warning('Profile password action failed for user=%s on %s: %s', request.user.pk, client.base_url(), exc)
             last_error = exc
     if response is None and last_error is not None:
