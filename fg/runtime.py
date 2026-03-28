@@ -244,7 +244,7 @@ def safe_pilot_registrations(pkid: int, *, servers: list[RuntimeServer] | None =
     all_registrations: list[RuntimeRegistration] = []
     for service in get_all_runtime_services():
         try:
-            all_registrations.extend(service.registrations_for_pilot(pkid, servers=servers))
+            all_registrations.extend(service.registrations_for_pilot(pkid))
         except BgSyncError as exc:
             logger.warning('Failed to load BG registrations for pkid=%s from %s: %s', pkid, service._client.base_url(), exc)
     return all_registrations
@@ -254,7 +254,7 @@ def safe_registration_inventory(*, servers: list[RuntimeServer] | None = None) -
     all_registrations: list[RuntimeRegistration] = []
     for service in get_all_runtime_services():
         try:
-            all_registrations.extend(service.list_registrations(servers=servers))
+            all_registrations.extend(service.list_registrations())
         except BgSyncError as exc:
             logger.warning('Failed to load BG registration inventory from %s: %s', service._client.base_url(), exc)
     return all_registrations
