@@ -401,17 +401,23 @@ def _profile_password_action_response(request):
     if mapped_pkid is not None:
         target_pkid = mapped_pkid
 
-    # Send password directly to BG — BG owns registrations
-    try:
-        response = _CONTROL_CLIENT.reset_password_for_user(
-            user=request.user,
-            password=password,
-            pkid=target_pkid,
-            requested_by=str(request.user.get_username() or 'unknown'),
-        )
-    except BgSyncError as exc:
-        logger.warning('Profile password action failed for user=%s: %s', request.user.pk, exc)
-        bg_unavailable = _bg_unavailable_error(exc)
+    # Send password to all BG endpoints — user may have registrations on multiple servers
+    from .control import get_active_bg_clients
+    response = None
+    last_error = None
+    for client in get_active_bg_clients():
+        try:
+            response = client.reset_password_for_user(
+                user=request.user,
+                password=password,
+                pkid=target_pkid,
+                requested_by=str(request.user.get_username() or 'unknown'),
+            )
+        except BgSyncError as exc:
+            logger.warning('Profile password action failed for user=%s on %s: %s', request.user.pk, client.base_url(), exc)
+            last_error = exc
+    if response is None and last_error is not None:
+        bg_unavailable = _bg_unavailable_error(last_error)
         inactive_message = _('Mumble account inactive, try again later.')
         if is_ajax:
             if bg_unavailable:
