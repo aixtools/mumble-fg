@@ -47,10 +47,15 @@ def _control_timeout() -> int:
     return int(getattr(settings, 'MURMUR_CONTROL_TIMEOUT_SECONDS', REQUEST_TIMEOUT_SECONDS))
 
 
-def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
+def _control_headers(*, content_type_json: bool = False, psk_override: str | None = None) -> dict[str, str]:
     headers: dict[str, str] = {}
     if content_type_json:
         headers['Content-Type'] = 'application/json'
+
+    if psk_override:
+        headers['X-FGBG-PSK'] = psk_override
+        headers['X-Murmur-Control-PSK'] = psk_override
+        return headers
 
     # Prefer youngest session key in FG keyring (normal mode).
     for key_id, secret in control_keyring.decrypt_active_keypairs(limit=1):
@@ -99,8 +104,10 @@ def _request_json(
     requested_by: str | None = None,
     allow_not_found: bool = False,
     sync_keys: bool = True,
+    base_url: str | None = None,
+    psk: str | None = None,
 ) -> dict[str, Any]:
-    url = f'{_control_base_url()}{path}'
+    url = f'{base_url or _control_base_url()}{path}'
     body = None
     if payload is not None:
         body = json.dumps(_control_envelope(payload, requested_by=requested_by)).encode('utf-8')
@@ -108,7 +115,7 @@ def _request_json(
         url,
         data=body,
         method=method,
-        headers=_control_headers(content_type_json=payload is not None),
+        headers=_control_headers(content_type_json=payload is not None, psk_override=psk),
     )
     try:
         with urlopen(request, timeout=_control_timeout()) as response:
@@ -177,12 +184,25 @@ def _maybe_sync_key_from_response_headers(headers: dict[str, str], *, requested_
         control_keyring.store_encrypted(key_id=str(response_key_id), secret_ciphertext_b64=encrypted_secret)
 
 
-def _post_json(path: str, payload: dict[str, Any], *, requested_by: str | None = None) -> dict[str, Any]:
-    return _request_json(path, method='POST', payload=payload, requested_by=requested_by)
+def _post_json(
+    path: str,
+    payload: dict[str, Any],
+    *,
+    requested_by: str | None = None,
+    base_url: str | None = None,
+    psk: str | None = None,
+) -> dict[str, Any]:
+    return _request_json(path, method='POST', payload=payload, requested_by=requested_by, base_url=base_url, psk=psk)
 
 
-def _get_json(path: str, *, allow_not_found: bool = False) -> dict[str, Any]:
-    return _request_json(path, method='GET', allow_not_found=allow_not_found)
+def _get_json(
+    path: str,
+    *,
+    allow_not_found: bool = False,
+    base_url: str | None = None,
+    psk: str | None = None,
+) -> dict[str, Any]:
+    return _request_json(path, method='GET', allow_not_found=allow_not_found, base_url=base_url, psk=psk)
 
 
 def _extract_murmur_userid(response: dict[str, Any]) -> int | None:
@@ -247,8 +267,19 @@ def _normalize_pilot_snapshot_payload(snapshot: PilotSnapshot | dict[str, Any]) 
 class BgControlClient:
     """OO adapter for FG -> BG control and probe endpoints."""
 
+    def __init__(self, *, base_url: str | None = None, psk: str | None = None):
+        self._base_url = base_url.rstrip('/') if base_url else None
+        stripped_psk = str(psk or '').strip()
+        self._psk = stripped_psk or None
+
     def base_url(self) -> str:
-        return _control_base_url()
+        return self._base_url or _control_base_url()
+
+    def _post(self, path: str, payload: dict[str, Any], *, requested_by: str | None = None) -> dict[str, Any]:
+        return _post_json(path, payload, requested_by=requested_by, base_url=self._base_url, psk=self._psk)
+
+    def _get(self, path: str, *, allow_not_found: bool = False) -> dict[str, Any]:
+        return _get_json(path, allow_not_found=allow_not_found, base_url=self._base_url, psk=self._psk)
 
     def bootstrap_control_key(self, *, requested_by: str | None = None) -> str | None:
         """Fetch the newest BG session key (encrypted to FG) and store it locally.
@@ -260,7 +291,7 @@ class BgControlClient:
         pem = fg_pki.public_key_pem()
         if not pem:
             raise BgSyncError('FG public key is not configured (FG_PUBLIC_KEY_PATH)')
-        response = _post_json(
+        response = self._post(
             '/v1/control-keys/export',
             {
                 'fg_public_key_pem': pem.decode('ascii'),
@@ -275,7 +306,7 @@ class BgControlClient:
         return key_id
 
     def list_servers(self) -> list[dict[str, Any]]:
-        response = _get_json('/v1/servers')
+        response = self._get('/v1/servers')
         servers = response.get('servers')
         if not isinstance(servers, list):
             raise BgSyncError('Server probe response did not include servers')
@@ -285,14 +316,14 @@ class BgControlClient:
         path = f'/v1/servers/{int(server_id)}/inventory'
         if refresh:
             path = f'{path}?refresh=1'
-        response = _get_json(path)
+        response = self._get(path)
         inventory = response.get('inventory')
         if not isinstance(inventory, dict):
             raise BgSyncError('Server inventory response did not include inventory')
         return response
 
     def list_registrations(self) -> list[dict[str, Any]]:
-        response = _get_json('/v1/registrations')
+        response = self._get('/v1/registrations')
         registrations = response.get('registrations')
         if not isinstance(registrations, list):
             raise BgSyncError('Registration probe response did not include registrations')
@@ -305,7 +336,7 @@ class BgControlClient:
         *,
         requested_by: str | None = None,
     ) -> int | None:
-        response = _post_json(
+        response = self._post(
             '/v1/registrations/sync',
             _sync_endpoint_payload(mumble_user, password=password),
             requested_by=requested_by,
@@ -318,7 +349,7 @@ class BgControlClient:
         *,
         requested_by: str | None = None,
     ) -> bool:
-        response = _post_json(
+        response = self._post(
             '/v1/registrations/disable',
             {
                 'pkid': mumble_user.user_id,
@@ -345,7 +376,7 @@ class BgControlClient:
         return None
 
     def probe_pilot_registrations(self, pkid: int) -> list[dict[str, Any]]:
-        response = _get_json(f'/v1/pilots/{int(pkid)}', allow_not_found=True)
+        response = self._get(f'/v1/pilots/{int(pkid)}', allow_not_found=True)
         if str(response.get('status', '')).lower() == 'not_found':
             return []
         registrations = response.get('registrations')
@@ -381,7 +412,7 @@ class BgControlClient:
         if session_ids is not None:
             payload['session_ids'] = self._normalize_session_ids(session_ids)
 
-        response = _post_json(
+        response = self._post(
             '/v1/admin-membership/sync',
             payload,
             requested_by=requested_by,
@@ -416,7 +447,7 @@ class BgControlClient:
                 payload['encrypted_password'] = encrypt_password(password)
             else:
                 payload['password'] = password
-        response = _post_json('/v1/password-reset', payload, requested_by=requested_by)
+        response = self._post('/v1/password-reset', payload, requested_by=requested_by)
         resolved_password = _extract_password(response)
         if resolved_password is None:
             raise BgSyncError('Control response did not include password')
@@ -441,7 +472,7 @@ class BgControlClient:
                 payload['encrypted_password'] = encrypt_password(password)
             else:
                 payload['password'] = password
-        return _post_json('/v1/password-reset', payload, requested_by=requested_by)
+        return self._post('/v1/password-reset', payload, requested_by=requested_by)
 
     def sync_registration_contract(
         self,
@@ -468,7 +499,7 @@ class BgControlClient:
             **request_contract.as_payload(),
             'is_super': bool(is_super),
         }
-        response = _post_json('/v1/registrations/contract-sync', payload, requested_by=requested_by)
+        response = self._post('/v1/registrations/contract-sync', payload, requested_by=requested_by)
         return MurmurContract.from_mapping(response).as_payload()
 
     def sync_access_rules(
@@ -518,7 +549,7 @@ class BgControlClient:
                 }
             )
 
-        response = _post_json(
+        response = self._post(
             '/v1/access-rules/sync',
             {
                 'is_super': bool(is_super),
@@ -528,7 +559,7 @@ class BgControlClient:
         )
 
         if pilot_snapshot is not None:
-            snapshot_response = _post_json(
+            snapshot_response = self._post(
                 '/v1/pilot-snapshot/sync',
                 {
                     'is_super': bool(is_super),
@@ -538,9 +569,6 @@ class BgControlClient:
             )
             response['pilot_snapshot'] = snapshot_response
 
-        # Optional: push eligibility into BG provisioning and Murmur reconcile.
-        # This is a second request to preserve historical /v1/access-rules/sync
-        # semantics while allowing immediate state convergence when desired.
         if reconcile:
             provision_payload: dict[str, Any] = {
                 'dry_run': bool(dry_run),
@@ -548,7 +576,7 @@ class BgControlClient:
             }
             if server_id is not None:
                 provision_payload['server_id'] = int(server_id)
-            provision_response = _post_json(
+            provision_response = self._post(
                 '/v1/provision',
                 provision_payload,
                 requested_by=requested_by,
@@ -558,7 +586,21 @@ class BgControlClient:
         return response
 
 
+def get_active_bg_clients() -> list[BgControlClient]:
+    """Return a BgControlClient for each active BgEndpoint, or a single
+    default client if no endpoints are configured."""
+    from fg.models import BgEndpoint
+    endpoints = list(BgEndpoint.objects.filter(is_active=True))
+    if not endpoints:
+        return [BgControlClient()]
+    return [
+        BgControlClient(base_url=ep.url, psk=ep.psk or None)
+        for ep in endpoints
+    ]
+
+
 __all__ = [
     'BgSyncError',
     'BgControlClient',
+    'get_active_bg_clients',
 ]

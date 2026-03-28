@@ -1,20 +1,19 @@
 import logging
 
 from .acl_sync import sync_acl_rules_to_bg
-from .control import BgControlClient, BgSyncError
+from .control import BgControlClient, BgSyncError, get_active_bg_clients
 from .group_mapping import build_group_mapping_config, effective_groups_csv_for_user
 from .models import MumbleUser
-from .runtime import get_runtime_service
+from .runtime import BgRuntimeService
 from .views import _compute_display_name
 
 logger = logging.getLogger(__name__)
 
-_CONTROL_CLIENT = BgControlClient()
 
-
-def _push_groups_to_bg(obj):
+def _push_groups_to_bg(obj, *, control_client=None):
+    client = control_client or BgControlClient()
     try:
-        _CONTROL_CLIENT.sync_live_admin_membership(obj, requested_by='fg.group_sync')
+        client.sync_live_admin_membership(obj, requested_by='fg.group_sync')
     except BgSyncError:
         logger.exception(
             'Failed to push groups to BG for user_id=%s server=%s',
@@ -49,7 +48,7 @@ def update_mumble_groups(mumble_user_id):
         _push_groups_to_bg(mumble_user)
 
 
-def _update_registration_groups(registration, *, config):
+def _update_registration_groups(registration, *, config, control_client=None):
     user = registration.user
     if user is None:
         return
@@ -60,22 +59,23 @@ def _update_registration_groups(registration, *, config):
             'Updated groups for registration %s (user_id=%s): %s',
             registration.username, registration.user_id, new_groups,
         )
-        _push_groups_to_bg(registration)
+        _push_groups_to_bg(registration, control_client=control_client)
 
 
 def update_all_mumble_groups():
-    service = get_runtime_service()
-    try:
-        registrations = service.list_registrations()
-        registrations = service.attach_users(registrations)
-    except Exception:
-        logger.exception('Failed to fetch registrations from BG; skipping group sync')
-        return
-    active = [r for r in registrations if r.is_active]
-    logger.info('Running mumble group updates for %d active registrations from BG', len(active))
     config = build_group_mapping_config()
-    for registration in active:
-        _update_registration_groups(registration, config=config)
+    for client in get_active_bg_clients():
+        service = BgRuntimeService(client=client)
+        try:
+            registrations = service.list_registrations()
+            registrations = service.attach_users(registrations)
+        except Exception:
+            logger.exception('Failed to fetch registrations from BG %s; skipping', client.base_url())
+            continue
+        active = [r for r in registrations if r.is_active]
+        logger.info('Running group updates for %d active registrations from BG %s', len(active), client.base_url())
+        for registration in active:
+            _update_registration_groups(registration, config=config, control_client=client)
 
 
 def periodic_acl_sync():
