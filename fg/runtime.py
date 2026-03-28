@@ -224,6 +224,12 @@ def get_runtime_service() -> BgRuntimeService:
     return _RUNTIME_SERVICE
 
 
+def get_all_runtime_services() -> list[BgRuntimeService]:
+    """Return a BgRuntimeService per active BG endpoint."""
+    from fg.control import get_active_bg_clients
+    return [BgRuntimeService(client=c) for c in get_active_bg_clients()]
+
+
 def safe_list_servers() -> list[RuntimeServer]:
     try:
         return get_runtime_service().list_servers()
@@ -252,6 +258,7 @@ __all__ = [
     'BgRuntimeService',
     'RuntimeRegistration',
     'RuntimeServer',
+    'get_all_runtime_services',
     'get_runtime_service',
     'safe_list_servers',
     'safe_pilot_registrations',
