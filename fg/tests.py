@@ -1407,12 +1407,35 @@ class TasksTest(TestCase):
         from fg.tasks import update_mumble_groups
         update_mumble_groups(99999)  # should not raise
 
-    def test_update_all_mumble_groups(self):
+    def test_update_all_mumble_groups_discovers_from_bg(self):
+        from fg.runtime import RuntimeRegistration, RuntimeServer
         from fg.tasks import update_all_mumble_groups
-        with patch('fg.tasks.update_mumble_groups') as mock_update:
-            mock_update.side_effect = lambda *_args, **_kwargs: None
+
+        server = RuntimeServer(id=1, name='Finland', address='voice.example.com:64738')
+        registration = RuntimeRegistration(
+            user_id=self.user.pk,
+            server=server,
+            username='Test_Pilot',
+            display_name='Test Pilot',
+            is_active=True,
+            is_mumble_admin=False,
+            groups='',
+        )
+        registration.user = self.user
+
+        mock_service = SimpleNamespace(
+            list_registrations=lambda **kw: [registration],
+            attach_users=lambda regs: regs,
+        )
+        with patch('fg.tasks.get_runtime_service', return_value=mock_service), \
+             patch('fg.tasks._CONTROL_CLIENT.sync_live_admin_membership') as mock_sync:
             update_all_mumble_groups()
-            mock_update.assert_called_once_with(self.mu.pk)
+
+        mock_sync.assert_called_once()
+        call_obj = mock_sync.call_args[0][0]
+        self.assertEqual(call_obj.user_id, self.user.pk)
+        self.assertIn('Alliance_A', call_obj.groups)
+        self.assertIn('Corp_A', call_obj.groups)
 
     def test_update_skips_inactive(self):
         self.mu.is_active = False

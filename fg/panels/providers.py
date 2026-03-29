@@ -88,15 +88,18 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
 
     def _accounts_by_server(self, user_id: int) -> dict[int, Any]:
         try:
-            return {
+            local = {
                 mumble_user.server_id: mumble_user
                 for mumble_user in MumbleUser.objects.filter(user_id=user_id).select_related('server')
             }
+            if local:
+                return local
         except MurmurModelLookupError:
-            return {
-                registration.server_id: registration
-                for registration in safe_pilot_registrations(user_id, servers=self._active_servers())
-            }
+            pass
+        return {
+            registration.server_id: registration
+            for registration in safe_pilot_registrations(user_id, servers=self._active_servers())
+        }
 
     @staticmethod
     def _server_label(server) -> str:
