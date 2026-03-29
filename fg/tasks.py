@@ -1,5 +1,7 @@
 import logging
 
+from celery import shared_task
+
 from .acl_sync import sync_acl_rules_to_bg
 from .control import BgControlClient, BgSyncError
 from .group_mapping import build_group_mapping_config, effective_groups_csv_for_user
@@ -63,6 +65,7 @@ def _update_registration_groups(registration, *, config):
         _push_groups_to_bg(registration)
 
 
+@shared_task(ignore_result=True)
 def update_all_mumble_groups():
     service = get_runtime_service()
     try:
@@ -78,6 +81,7 @@ def update_all_mumble_groups():
         _update_registration_groups(registration, config=config)
 
 
+@shared_task(ignore_result=True)
 def periodic_acl_sync():
     response = sync_acl_rules_to_bg(
         requested_by='fg.periodic',
