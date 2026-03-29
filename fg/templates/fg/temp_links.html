@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Mumble Controls" %}{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+    <h1 style="margin: 0;">{% trans "Mumble Controls" %}</h1>
+</div>
+
+{% include 'fg/_controls_tabs.html' %}
+
+<section style="margin-bottom: 1.5rem; padding: 1rem; border: 1px solid var(--border-color, #2f3640); border-radius: 8px;">
+    <h2 style="margin-top: 0;">{% trans "Create Temp Link" %}</h2>
+    <form method="post" action="{% url 'mumble:temp_link_create' %}" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; align-items: end;">
+        {% csrf_token %}
+        <div>
+            <label style="display: block; font-weight: 600; margin-bottom: 0.25rem;">{% trans "Server" %}</label>
+            {% if servers|length > 1 %}
+                <select name="server" style="width: 100%; padding: 0.45rem 0.6rem;">
+                    {% for server in servers %}
+                        <option value="{{ server.server_key }}">{{ server.name }}</option>
+                    {% endfor %}
+                </select>
+            {% else %}
+                <div style="padding: 0.45rem 0.6rem; border: 1px solid var(--border-color, #2f3640); border-radius: 6px; background: rgba(255,255,255,0.02);">
+                    {% if servers %}{{ servers.0.name }}{% else %}{% trans "No BG server available" %}{% endif %}
+                </div>
+                {% if servers %}<input type="hidden" name="server" value="{{ servers.0.server_key }}">{% endif %}
+            {% endif %}
+        </div>
+        <div>
+            <label style="display: block; font-weight: 600; margin-bottom: 0.25rem;">{% trans "Label" %}</label>
+            <input type="text" name="label" maxlength="255" style="width: 100%; padding: 0.45rem 0.6rem;">
+        </div>
+        <div>
+            <label style="display: block; font-weight: 600; margin-bottom: 0.25rem;">{% trans "Duration (hours)" %}</label>
+            <input type="number" name="duration_hours" min="1" max="720" value="{{ default_duration_hours }}" style="width: 100%; padding: 0.45rem 0.6rem;">
+        </div>
+        <div>
+            <label style="display: block; font-weight: 600; margin-bottom: 0.25rem;">{% trans "Max Uses" %}</label>
+            <input type="number" name="max_uses" min="1" placeholder="{% trans 'Unlimited' %}" style="width: 100%; padding: 0.45rem 0.6rem;">
+        </div>
+        <div>
+            <label style="display: block; font-weight: 600; margin-bottom: 0.25rem;">{% trans "Groups" %}</label>
+            <input type="text" name="groups_csv" value="{{ default_groups_csv }}" style="width: 100%; padding: 0.45rem 0.6rem;">
+        </div>
+        <div>
+            <button type="submit" class="btn btn-primary btn-sm" {% if not can_change_temp_links or not servers %}disabled{% endif %}>{% trans "Create Link" %}</button>
+        </div>
+    </form>
+</section>
+
+<section style="padding: 1rem; border: 1px solid var(--border-color, #2f3640); border-radius: 8px;">
+    <h2 style="margin-top: 0;">{% trans "Current Links" %}</h2>
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr>
+                <th style="text-align: left; padding: 0.4rem 0;">{% trans "Label" %}</th>
+                <th style="text-align: left; padding: 0.4rem 0;">{% trans "Server" %}</th>
+                <th style="text-align: left; padding: 0.4rem 0;">{% trans "Expires" %}</th>
+                <th style="text-align: left; padding: 0.4rem 0;">{% trans "Usage" %}</th>
+                <th style="text-align: left; padding: 0.4rem 0;">{% trans "Groups" %}</th>
+                <th style="text-align: left; padding: 0.4rem 0;">{% trans "URL" %}</th>
+                <th style="text-align: left; padding: 0.4rem 0;">{% trans "Actions" %}</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in link_rows %}
+            <tr style="{% if not row.usable %}opacity: 0.6;{% endif %}">
+                <td style="padding: 0.45rem 0;">{{ row.link.label|default:row.link.token|truncatechars:32 }}</td>
+                <td style="padding: 0.45rem 0;">{{ row.link.server_name }}</td>
+                <td style="padding: 0.45rem 0;">{{ row.link.expires_at|date:"Y-m-d H:i" }}</td>
+                <td style="padding: 0.45rem 0;">{{ row.link.use_count }}{% if row.link.max_uses %}/{{ row.link.max_uses }}{% else %}/∞{% endif %}</td>
+                <td style="padding: 0.45rem 0;">{{ row.link.groups_csv }}</td>
+                <td style="padding: 0.45rem 0;"><code style="user-select: all;">{{ row.public_url }}</code></td>
+                <td style="padding: 0.45rem 0;">
+                    <form method="post" action="{% url 'mumble:temp_link_toggle_active' row.link.id %}" style="display: inline;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_temp_links %}disabled{% endif %}>
+                            {% if row.link.is_active %}{% trans "Disable" %}{% else %}{% trans "Enable" %}{% endif %}
+                        </button>
+                    </form>
+                    <form method="post" action="{% url 'mumble:temp_link_delete' row.link.id %}" style="display: inline;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-outline btn-xs" {% if not can_change_temp_links %}disabled{% endif %}>{% trans "Delete" %}</button>
+                    </form>
+                </td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="7" style="padding: 0.45rem 0;">{% trans "No temp links yet." %}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

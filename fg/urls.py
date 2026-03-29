@@ -40,4 +40,9 @@ urlpatterns = [
     path('group-mapping/toggle-cube-ignore/', views.group_mapping_toggle_cube_ignore, name='group_mapping_toggle_cube_ignore'),
     path('group-mapping/toggle-murmur-ignore/', views.group_mapping_toggle_murmur_ignore, name='group_mapping_toggle_murmur_ignore'),
     path('group-mapping/cleanup-ignored/', views.group_mapping_cleanup_ignored, name='group_mapping_cleanup_ignored'),
+    path('links/', views.temp_links, name='temp_links'),
+    path('links/create/', views.temp_link_create, name='temp_link_create'),
+    path('links/<int:link_id>/toggle-active/', views.temp_link_toggle_active, name='temp_link_toggle_active'),
+    path('links/<int:link_id>/delete/', views.temp_link_delete, name='temp_link_delete'),
+    path('temp/<slug:token>/', views.temp_link_public, name='temp_link_public'),
 ]

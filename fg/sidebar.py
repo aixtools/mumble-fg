@@ -8,6 +8,7 @@ def _can_view_mumble_controls(request):
         request.user.is_superuser
         or request.user.has_perm('mumble_fg.view_accessrule')
         or request.user.has_perm('mumble_fg.view_group_mapping')
+        or request.user.has_perm('mumble_fg.view_temp_links')
     )
 
 def _can_view_acl(request):
@@ -42,7 +43,7 @@ SIDEBAR_ITEMS = [
             '</svg>'
         ),
         'priority': 56,
-        'active_paths': ['mumble-ui/controls', 'mumble-ui/acl', 'mumble-ui/group-mapping'],
+        'active_paths': ['mumble-ui/controls', 'mumble-ui/acl', 'mumble-ui/group-mapping', 'mumble-ui/links'],
         'requires_auth': True,
         'requires_member': True,
         'visible': _can_view_mumble_controls,
