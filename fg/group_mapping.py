@@ -91,7 +91,7 @@ def effective_murmur_groups_for_user(user, *, mumble_user=None, _config=None) ->
 
         mappings = mapping_by_group.get(cube_group_name, [])
         if not mappings:
-            parts.append(cube_group_name.replace(' ', '_'))
+            parts.append(cube_group_name.replace(' ', '-'))
             continue
 
         for mapping in mappings:
