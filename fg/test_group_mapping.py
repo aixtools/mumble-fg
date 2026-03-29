@@ -37,13 +37,21 @@ def _grant_group_mapping_perm(user, codename):
     user.user_permissions.add(permission)
 
 
-def _runtime_server(pk=1, name='Finland'):
-    return SimpleNamespace(pk=pk, name=name, is_active=True, address='voice.example.com:64738')
+def _runtime_server(pk=1, name='Finland', server_key='voice-example-com-64738-vs1'):
+    return SimpleNamespace(pk=pk, name=name, is_active=True, address='voice.example.com:64738', server_key=server_key)
 
 
-def _snapshot(server_id=1, server_name='Finland', *, root_groups=None, channel_groups=None):
+def _snapshot(
+    server_id=1,
+    server_name='Finland',
+    server_key='voice-example-com-64738-vs1',
+    *,
+    root_groups=None,
+    channel_groups=None,
+):
     groups = channel_groups or [{'name': 'ops'}, {'name': 'command'}]
     return MurmurInventorySnapshot(
+        server_key=server_key,
         server_id=server_id,
         server_name=server_name,
         freshness_seconds=600,
@@ -140,6 +148,7 @@ class GroupMappingViewTest(TestCase):
             'fg.views._CONTROL_CLIENT.get_server_inventory',
             return_value={
                 'server_id': 7,
+                'server_key': 'voice-example-com-64738-vs1',
                 'server_label': 'Finland',
                 'freshness_seconds': 600,
                 'is_real_time': True,
@@ -153,13 +162,13 @@ class GroupMappingViewTest(TestCase):
             response = self.client.post(
                 reverse('mumble:group_mapping_refresh'),
                 {
-                    'server_id': '7',
+                    'server': 'voice-example-com-64738-vs1',
                     'cube_group_name': 'Command',
                 },
             )
 
         self.assertEqual(response.status_code, 302)
-        snapshot = MurmurInventorySnapshot.objects.get(server_id=7)
+        snapshot = MurmurInventorySnapshot.objects.get(server_key='voice-example-com-64738-vs1')
         self.assertEqual(snapshot.server_name, 'Finland')
         self.assertEqual(snapshot.inventory['root_groups'][0]['name'], 'ops')
         self.assertTrue(snapshot.is_real_time)
@@ -172,7 +181,7 @@ class GroupMappingViewTest(TestCase):
         response = self.client.post(
             reverse('mumble:group_mapping_add'),
             {
-                'server_id': '1',
+                'server': 'voice-example-com-64738-vs1',
                 'cube_group_name': 'Command',
                 'murmur_group_name': 'ops',
             },
@@ -183,7 +192,7 @@ class GroupMappingViewTest(TestCase):
         response = self.client.post(
             reverse('mumble:group_mapping_toggle_cube_ignore'),
             {
-                'server_id': '1',
+                'server': 'voice-example-com-64738-vs1',
                 'cube_group_name': 'Command',
             },
         )
@@ -193,7 +202,7 @@ class GroupMappingViewTest(TestCase):
         response = self.client.post(
             reverse('mumble:group_mapping_toggle_murmur_ignore'),
             {
-                'server_id': '1',
+                'server': 'voice-example-com-64738-vs1',
                 'cube_group_name': 'Command',
                 'murmur_group_name': 'ops',
             },
@@ -204,7 +213,7 @@ class GroupMappingViewTest(TestCase):
         response = self.client.post(
             reverse('mumble:group_mapping_cleanup_ignored'),
             {
-                'server_id': '1',
+                'server': 'voice-example-com-64738-vs1',
                 'cube_group_name': 'Command',
             },
         )
@@ -258,6 +267,35 @@ class GroupMappingViewTest(TestCase):
         self.assertContains(response, 'Load View')
         self.assertContains(response, 'Refresh From BG')
 
+    def test_group_mapping_accepts_stable_server_key_selector(self):
+        _grant_group_mapping_perm(self.user, 'view_group_mapping')
+        self._login()
+
+        with patch(
+            'fg.views.safe_list_servers',
+            return_value=[
+                _runtime_server(pk=5, name='Finland', server_key='voice-dev-aixtools-com-64738-vs1'),
+                _runtime_server(pk=8, name='Sweden', server_key='voice-dev-aixtools-com-64739-vs2'),
+            ],
+        ), patch(
+            'fg.views.all_cube_group_names',
+            return_value=['Command'],
+        ), patch(
+            'fg.views._load_inventory_snapshot',
+            return_value=(
+                _snapshot(
+                    server_id=8,
+                    server_name='Sweden',
+                    server_key='voice-dev-aixtools-com-64739-vs2',
+                ),
+                '',
+            ),
+        ):
+            response = self.client.get(reverse('mumble:group_mapping'), {'server': 'voice-dev-aixtools-com-64739-vs2'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Sweden')
+        self.assertContains(response, 'value="voice-dev-aixtools-com-64739-vs2"', html=False)
 
 class EffectiveMurmurGroupsMemberTest(TestCase):
     databases = {'default', 'cube'}

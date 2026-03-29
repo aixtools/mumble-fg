@@ -20,6 +20,7 @@ class RuntimeServer:
     id: int
     name: str
     address: str
+    server_key: str
     is_active: bool = True
 
     @property
@@ -95,10 +96,15 @@ class BgRuntimeService:
         server_id = _coerce_int(payload.get('id'))
         if server_id is None:
             return None
+        server_key = str(payload.get('server_key', '') or '').strip()
+        if not server_key:
+            logger.warning('Skipping BG server payload without server_key: %s', payload)
+            return None
         return RuntimeServer(
             id=server_id,
             name=str(payload.get('name', '') or '').strip() or f'server-{server_id}',
             address=str(payload.get('address', '') or '').strip(),
+            server_key=server_key,
             is_active=_coerce_bool(payload.get('is_active'), default=True),
         )
 
@@ -111,6 +117,7 @@ class BgRuntimeService:
             id=server_id,
             name=str(payload.get('server_name', '') or '').strip() or f'server-{server_id}',
             address='',
+            server_key='',
             is_active=_coerce_bool(payload.get('is_active'), default=True),
         )
 

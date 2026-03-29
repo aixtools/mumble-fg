@@ -130,9 +130,13 @@ def user_has_mumble_admin_bypass(user) -> bool:
 def store_inventory_snapshot(payload: dict[str, Any]) -> MurmurInventorySnapshot:
     fetched_at_raw = payload.get('fetched_at')
     fetched_at = fetched_at_raw if fetched_at_raw is None else parse_datetime(str(fetched_at_raw))
+    server_key = str(payload.get('server_key', '') or '').strip()
+    if not server_key:
+        raise ValueError('server_key missing from inventory payload')
     snapshot, _created = MurmurInventorySnapshot.objects.update_or_create(
-        server_id=int(payload.get('server_id')),
+        server_key=server_key,
         defaults={
+            'server_id': int(payload.get('server_id')) if payload.get('server_id') is not None else None,
             'server_name': str(payload.get('server_label', '') or ''),
             'freshness_seconds': int(payload.get('freshness_seconds') or 600),
             'is_real_time': bool(payload.get('is_real_time')),

@@ -281,8 +281,11 @@ class BgControlClient:
             raise BgSyncError('Server probe response did not include servers')
         return [server for server in servers if isinstance(server, dict)]
 
-    def get_server_inventory(self, server_id: int, *, refresh: bool = False) -> dict[str, Any]:
-        path = f'/v1/servers/{int(server_id)}/inventory'
+    def get_server_inventory(self, server_key: str, *, refresh: bool = False) -> dict[str, Any]:
+        normalized_server_key = str(server_key or '').strip()
+        if not normalized_server_key:
+            raise BgSyncError('Server key is required')
+        path = f'/v1/servers/{normalized_server_key}/inventory'
         if refresh:
             path = f'{path}?refresh=1'
         response = _get_json(path)

@@ -1023,6 +1023,7 @@ class RuntimeFallbackAccountViewsTest(TestCase):
             id=77,
             name='Runtime Server',
             address='runtime.example.com:64738',
+            server_key='runtime-example-com-64738-vs0',
         )
         self.client.force_login(self.user)
 
@@ -1138,6 +1139,7 @@ class RuntimePayloadCompatibilityTest(TestCase):
             id=77,
             name='Test Runtime Server',
             address='runtime.example.com:64738',
+            server_key='runtime-example-com-64738-vs0',
         )
         self.service = BgRuntimeService()
 
@@ -1181,6 +1183,7 @@ class RuntimeFallbackManageViewTest(TestCase):
             id=83,
             name='Runtime Admin Server',
             address='runtime-admin.example.com:64738',
+            server_key='runtime-admin-example-com-64738-vs0',
         )
         observed_at = timezone.now()
         self.registration = RuntimeRegistration(
@@ -1234,6 +1237,7 @@ class RuntimeFallbackManageActionViewTest(TestCase):
             id=91,
             name='Runtime Action Server',
             address='runtime-action.example.com:64738',
+            server_key='runtime-action-example-com-64738-vs0',
         )
 
     def _registration(self, *, is_mumble_admin=False):
@@ -1653,6 +1657,7 @@ class RuntimeFallbackProfilePanelProviderTest(TestCase):
             id=41,
             name='Runtime Server',
             address='runtime.example.com:64738',
+            server_key='runtime-example-com-64738-vs0',
         )
         runtime_registration = RuntimeRegistration(
             user_id=self.user.pk,

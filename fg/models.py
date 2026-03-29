@@ -359,7 +359,8 @@ class IgnoredMurmurGroup(models.Model):
 
 
 class MurmurInventorySnapshot(models.Model):
-    server_id = models.PositiveIntegerField(unique=True)
+    server_key = models.CharField(max_length=255, unique=True, default='')
+    server_id = models.PositiveIntegerField(blank=True, null=True)
     server_name = models.CharField(max_length=255, blank=True, default='')
     freshness_seconds = models.PositiveIntegerField(default=600)
     is_real_time = models.BooleanField(default=False)
@@ -369,10 +370,10 @@ class MurmurInventorySnapshot(models.Model):
 
     class Meta:
         db_table = 'fg_murmur_inventory_snapshot'
-        ordering = ['server_id']
+        ordering = ['server_name', 'server_key']
 
     def __str__(self) -> str:
-        return f'{self.server_id}:{self.server_name}'
+        return f'{self.server_key}:{self.server_name}'
 
 
 def append_access_rule_audit(
