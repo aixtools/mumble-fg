@@ -1577,21 +1577,40 @@ def _has_temp_links_perm(user, codename: str) -> bool:
     )
 
 
+def _user_in_temp_link_editor_groups(user) -> bool:
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    try:
+        from fg.models import TempLinkSettings
+        settings = TempLinkSettings.load()
+        editor_groups = settings.editor_groups.all()
+        if not editor_groups:
+            return False
+        adapter = get_host_adapter()
+        memberships = adapter.get_approved_group_memberships(user)
+        member_group_ids = {m.group_id for m in memberships}
+        return any(g.pk in member_group_ids for g in editor_groups)
+    except Exception:
+        return False
+
+
 def _can_view_temp_links(user) -> bool:
-    return _has_temp_links_perm(user, 'view_temp_links')
+    return _has_temp_links_perm(user, 'view_temp_links') or _user_in_temp_link_editor_groups(user)
 
 
 def _can_change_temp_links(user) -> bool:
-    return _can_view_temp_links(user) and _has_temp_links_perm(user, 'change_temp_links')
+    in_editor = _user_in_temp_link_editor_groups(user)
+    can_view = _has_temp_links_perm(user, 'view_temp_links') or in_editor
+    return can_view and (_has_temp_links_perm(user, 'change_temp_links') or in_editor)
 
 
 def _parse_duration_hours(value: str) -> int:
     try:
-        normalized = int(str(value or '').strip() or '24')
+        normalized = int(str(value or '').strip() or '3')
     except (TypeError, ValueError) as exc:
         raise ValueError('Duration must be an integer number of hours') from exc
-    if normalized <= 0 or normalized > 24 * 30:
-        raise ValueError('Duration must be between 1 and 720 hours')
+    if normalized <= 0 or normalized > 24:
+        raise ValueError('Duration must be between 1 and 24 hours')
     return normalized
 
 
@@ -1642,7 +1661,7 @@ def temp_links(request):
             'servers': servers,
             'link_rows': rows,
             'can_change_temp_links': _can_change_temp_links(request.user),
-            'default_duration_hours': 24,
+            'default_duration_hours': 3,
             'default_groups_csv': 'Guest',
         },
     )

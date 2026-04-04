@@ -9,7 +9,13 @@ def _can_view_mumble_controls(request):
         or request.user.has_perm('mumble_fg.view_accessrule')
         or request.user.has_perm('mumble_fg.view_group_mapping')
         or request.user.has_perm('mumble_fg.view_temp_links')
+        or _user_in_temp_link_editor_groups(request.user)
     )
+
+
+def _user_in_temp_link_editor_groups(user):
+    from fg.views import _user_in_temp_link_editor_groups as _check
+    return _check(user)
 
 def _can_view_acl(request):
     if not request.user.is_authenticated:

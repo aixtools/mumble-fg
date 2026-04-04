@@ -35,7 +35,7 @@
         </div>
         <div>
             <label style="display: block; font-weight: 600; margin-bottom: 0.25rem;">{% trans "Duration (hours)" %}</label>
-            <input type="number" name="duration_hours" min="1" max="720" value="{{ default_duration_hours }}" style="width: 100%; padding: 0.45rem 0.6rem;">
+            <input type="number" name="duration_hours" min="1" max="24" value="{{ default_duration_hours }}" style="width: 100%; padding: 0.45rem 0.6rem;">
         </div>
         <div>
             <label style="display: block; font-weight: 600; margin-bottom: 0.25rem;">{% trans "Max Uses" %}</label>
@@ -73,7 +73,10 @@
                 <td style="padding: 0.45rem 0;">{{ row.link.expires_at|date:"Y-m-d H:i" }}</td>
                 <td style="padding: 0.45rem 0;">{{ row.link.use_count }}{% if row.link.max_uses %}/{{ row.link.max_uses }}{% else %}/∞{% endif %}</td>
                 <td style="padding: 0.45rem 0;">{{ row.link.groups_csv }}</td>
-                <td style="padding: 0.45rem 0;"><code style="user-select: all;">{{ row.public_url }}</code></td>
+                <td style="padding: 0.45rem 0;">
+                    <code style="user-select: all; font-size: 0.85em;">{{ row.public_url }}</code>
+                    <button type="button" class="btn btn-outline btn-xs" style="margin-left: 0.3rem;" onclick="navigator.clipboard.writeText('{{ row.public_url }}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+                </td>
                 <td style="padding: 0.45rem 0;">
                     <form method="post" action="{% url 'mumble:temp_link_toggle_active' row.link.id %}" style="display: inline;">
                         {% csrf_token %}

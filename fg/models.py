@@ -406,6 +406,34 @@ class TempLink(models.Model):
         return self.label or self.token
 
 
+class TempLinkSettings(models.Model):
+    """Singleton settings for temp link permissions."""
+
+    editor_groups = models.ManyToManyField(
+        'accounts.Group',
+        blank=True,
+        related_name='temp_link_settings',
+        help_text='Groups allowed to create and manage temp links',
+    )
+
+    class Meta:
+        db_table = 'fg_temp_link_settings'
+        verbose_name = 'Temp Link Settings'
+        verbose_name_plural = 'Temp Link Settings'
+
+    def __str__(self) -> str:
+        return 'Temp Link Settings'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 def append_access_rule_audit(
     *,
     action: str,
@@ -492,6 +520,7 @@ __all__ = [
     'PilotSnapshotHash',
     'ResolvedMurmurModels',
     'ControlChannelKeyEntry',
+    'TempLinkSettings',
     'access_rule_snapshot',
     'append_access_rule_audit',
     'resolve_murmur_model',
