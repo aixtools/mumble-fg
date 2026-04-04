@@ -202,13 +202,13 @@ jobs:
           python manage.py migrate mumble_fg --noinput
           EOF
 
-      - name: Sync FG_PKI_PASSPHRASE into FG env (optional)
+      - name: Sync FG_PKI_PASSPHRASE into Cube env (optional)
         env:
           FG_PKI_PASSPHRASE_SECRET: ${{ secrets.FG_PKI_PASSPHRASE }}
         run: |
           set -euo pipefail
-          if [ -z "${DEPLOY_ENV_FILE:-}" ]; then
-            echo "No env_file configured in deploy target; skipping FG_PKI_PASSPHRASE sync."
+          if [ -z "${DEPLOY_CUBE_PROJECT_DIR:-}" ]; then
+            echo "No cube_project_dir configured in deploy target; skipping FG_PKI_PASSPHRASE sync."
             exit 0
           fi
           if [ -z "${FG_PKI_PASSPHRASE_SECRET:-}" ]; then
@@ -218,9 +218,8 @@ jobs:
 
           FG_PKI_PASSPHRASE_SECRET_B64="$(printf '%s' "${FG_PKI_PASSPHRASE_SECRET}" | base64 | tr -d '\n')"
           ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
-            "DEPLOY_ENV_FILE='${DEPLOY_ENV_FILE}' FG_PKI_PASSPHRASE_SECRET_B64='${FG_PKI_PASSPHRASE_SECRET_B64}' bash -s" <<'EOF'
+            "CUBE_ENV_FILE='${DEPLOY_CUBE_PROJECT_DIR}/.env' FG_PKI_PASSPHRASE_SECRET_B64='${FG_PKI_PASSPHRASE_SECRET_B64}' bash -s" <<'EOF'
           set -euo pipefail
-          mkdir -p "$(dirname "${DEPLOY_ENV_FILE}")"
 
           FG_PKI_PASSPHRASE="$(printf '%s' "${FG_PKI_PASSPHRASE_SECRET_B64}" | base64 -d)"
           export FG_PKI_PASSPHRASE
@@ -230,7 +229,7 @@ jobs:
           import shlex
           from pathlib import Path
 
-          env_path = Path(os.environ["DEPLOY_ENV_FILE"])
+          env_path = Path(os.environ["CUBE_ENV_FILE"])
           line = f"FG_PKI_PASSPHRASE={shlex.quote(os.environ['FG_PKI_PASSPHRASE'])}"
 
           if env_path.exists():
@@ -262,13 +261,13 @@ jobs:
       - name: Ensure FG keypair exists (optional)
         run: |
           set -euo pipefail
-          if [ -z "${DEPLOY_ENV_FILE:-}" ]; then
-            echo "No env_file configured in deploy target; skipping keypair ensure."
+          if [ -z "${DEPLOY_CUBE_PROJECT_DIR:-}" ]; then
+            echo "No cube_project_dir configured in deploy target; skipping keypair ensure."
             exit 0
           fi
 
           ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
-            "DEPLOY_CUBE_VENV='${DEPLOY_CUBE_VENV}' DEPLOY_ENV_FILE='${DEPLOY_ENV_FILE}' bash -s" <<'EOF'
+            "DEPLOY_CUBE_VENV='${DEPLOY_CUBE_VENV}' CUBE_ENV_FILE='${DEPLOY_CUBE_PROJECT_DIR}/.env' bash -s" <<'EOF'
           set -euo pipefail
 
           if [ -f /etc/mumble-fg/keys/private_key.pem ] && [ -f /etc/mumble-fg/keys/public_key.pem ]; then
@@ -282,10 +281,10 @@ jobs:
             exit 1
           fi
 
-          if [ -f "${DEPLOY_ENV_FILE}" ]; then
+          if [ -f "${CUBE_ENV_FILE}" ]; then
             set -a
             # shellcheck disable=SC1090
-            source "${DEPLOY_ENV_FILE}"
+            source "${CUBE_ENV_FILE}"
             set +a
           fi
 

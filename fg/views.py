@@ -1,5 +1,7 @@
 import json
 import logging
+import secrets
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib import messages
@@ -8,6 +10,8 @@ from django.contrib.auth import get_user_model
 from django.http import Http404, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.timezone import now
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
@@ -50,6 +54,7 @@ from .models import (
     IgnoredMurmurGroup,
     MumbleUser, MurmurModelLookupError, access_rule_snapshot, append_access_rule_audit,
     MurmurInventorySnapshot,
+    TempLink,
     resolve_murmur_models,
 )
 from .runtime import RuntimeRegistration, get_runtime_service, safe_list_servers, safe_registration_inventory
@@ -791,6 +796,15 @@ def _controls_tabs(user, active_key: str) -> list[dict[str, object]]:
                 'active': active_key == 'groups',
             }
         )
+    if _can_view_temp_links(user):
+        tabs.append(
+            {
+                'key': 'links',
+                'label': _('Links'),
+                'url': reverse('mumble:temp_links'),
+                'active': active_key == 'links',
+            }
+        )
     return tabs
 
 
@@ -934,6 +948,8 @@ def mumble_controls(request):
         return redirect('mumble:acl_list')
     if _can_view_group_mapping(request.user):
         return redirect('mumble:group_mapping')
+    if _can_view_temp_links(request.user):
+        return redirect('mumble:temp_links')
     return HttpResponseForbidden()
 
 
@@ -1548,6 +1564,231 @@ def _can_view_group_mapping(user) -> bool:
 
 def _can_change_group_mapping(user) -> bool:
     return _can_view_group_mapping(user) and _has_group_mapping_perm(user, 'change_group_mapping')
+
+
+def _temp_links_admin_bypass(user):
+    return user.is_superuser
+
+
+def _has_temp_links_perm(user, codename: str) -> bool:
+    return user.is_authenticated and (
+        _temp_links_admin_bypass(user)
+        or user.has_perm(f'mumble_fg.{codename}')
+    )
+
+
+def _user_in_temp_link_editor_groups(user) -> bool:
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    try:
+        from fg.models import TempLinkSettings
+        settings = TempLinkSettings.load()
+        editor_groups = settings.editor_groups.all()
+        if not editor_groups:
+            return False
+        adapter = get_host_adapter()
+        memberships = adapter.get_approved_group_memberships(user)
+        member_group_ids = {m.group_id for m in memberships}
+        return any(g.pk in member_group_ids for g in editor_groups)
+    except Exception:
+        return False
+
+
+def _can_view_temp_links(user) -> bool:
+    return _has_temp_links_perm(user, 'view_temp_links') or _user_in_temp_link_editor_groups(user)
+
+
+def _can_change_temp_links(user) -> bool:
+    in_editor = _user_in_temp_link_editor_groups(user)
+    can_view = _has_temp_links_perm(user, 'view_temp_links') or in_editor
+    return can_view and (_has_temp_links_perm(user, 'change_temp_links') or in_editor)
+
+
+def _parse_duration_hours(value: str) -> int:
+    try:
+        normalized = int(str(value or '').strip() or '3')
+    except (TypeError, ValueError) as exc:
+        raise ValueError('Duration must be an integer number of hours') from exc
+    if normalized <= 0 or normalized > 24:
+        raise ValueError('Duration must be between 1 and 24 hours')
+    return normalized
+
+
+def _parse_max_uses(value: str) -> int | None:
+    normalized = str(value or '').strip()
+    if not normalized:
+        return None
+    try:
+        parsed = int(normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('Max uses must be an integer') from exc
+    if parsed <= 0:
+        raise ValueError('Max uses must be greater than zero')
+    return parsed
+
+
+def _temp_link_is_usable(link: TempLink) -> bool:
+    if not link.is_active:
+        return False
+    if link.expires_at <= now():
+        return False
+    if link.max_uses is not None and link.use_count >= link.max_uses:
+        return False
+    return True
+
+
+@login_required
+def temp_links(request):
+    if not _can_view_temp_links(request.user):
+        return HttpResponseForbidden()
+
+    servers = [server for server in safe_list_servers() if server.is_active]
+    rows = []
+    for link in TempLink.objects.order_by('-created_at'):
+        rows.append(
+            {
+                'link': link,
+                'public_url': request.build_absolute_uri(reverse('mumble:temp_link_public', args=[link.token])),
+                'usable': _temp_link_is_usable(link),
+            }
+        )
+
+    return render(
+        request,
+        'fg/temp_links.html',
+        {
+            'controls_tabs': _controls_tabs(request.user, 'links'),
+            'servers': servers,
+            'link_rows': rows,
+            'can_change_temp_links': _can_change_temp_links(request.user),
+            'default_duration_hours': 3,
+            'default_groups_csv': 'Guest',
+        },
+    )
+
+
+@require_POST
+@login_required
+def temp_link_create(request):
+    if not _can_change_temp_links(request.user):
+        return HttpResponseForbidden()
+
+    servers = [server for server in safe_list_servers() if server.is_active]
+    server = _resolve_server_from_selector(servers, str(request.POST.get('server', '') or '').strip())
+    if server is None:
+        messages.error(request, _('Select a valid Mumble server.'))
+        return redirect('mumble:temp_links')
+
+    label = str(request.POST.get('label', '') or '').strip()
+    groups_csv = str(request.POST.get('groups_csv', '') or 'Guest').strip() or 'Guest'
+    try:
+        duration_hours = _parse_duration_hours(str(request.POST.get('duration_hours', '') or '24'))
+        max_uses = _parse_max_uses(str(request.POST.get('max_uses', '') or ''))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect('mumble:temp_links')
+
+    link = TempLink.objects.create(
+        label=label,
+        token=secrets.token_hex(24),
+        server_key=_server_selector_value(server),
+        server_name=str(server.name or ''),
+        groups_csv=groups_csv,
+        max_uses=max_uses,
+        expires_at=now() + timedelta(hours=duration_hours),
+        created_by_username=request.user.get_username() or '',
+    )
+    messages.success(request, _('Temp link created.'))
+    return redirect('mumble:temp_links')
+
+
+@require_POST
+@login_required
+def temp_link_toggle_active(request, link_id: int):
+    if not _can_change_temp_links(request.user):
+        return HttpResponseForbidden()
+    link = get_object_or_404(TempLink, pk=link_id)
+    link.is_active = not link.is_active
+    link.save(update_fields=['is_active', 'updated_at'])
+    if not link.is_active:
+        try:
+            _CONTROL_CLIENT.revoke_temp_link(
+                link_token=link.token,
+                requested_by=request.user.get_username() or 'unknown',
+            )
+        except BgSyncError as exc:
+            messages.warning(request, _('Link disabled locally, but BG revoke failed: %(error)s') % {'error': str(exc)})
+    messages.success(request, _('Temp link updated.'))
+    return redirect('mumble:temp_links')
+
+
+@require_POST
+@login_required
+def temp_link_delete(request, link_id: int):
+    if not _can_change_temp_links(request.user):
+        return HttpResponseForbidden()
+    link = get_object_or_404(TempLink, pk=link_id)
+    try:
+        _CONTROL_CLIENT.revoke_temp_link(
+            link_token=link.token,
+            requested_by=request.user.get_username() or 'unknown',
+        )
+    except BgSyncError as exc:
+        messages.warning(request, _('BG revoke failed before delete: %(error)s') % {'error': str(exc)})
+    link.delete()
+    messages.success(request, _('Temp link deleted.'))
+    return redirect('mumble:temp_links')
+
+
+def temp_link_public(request, token: str):
+    link = get_object_or_404(TempLink, token=str(token or '').strip())
+    usable = _temp_link_is_usable(link)
+    credentials = None
+    error_message = ''
+
+    if request.method == 'POST':
+        display_name = str(request.POST.get('display_name', '') or '').strip()
+        if not usable:
+            error_message = _('This temp link is no longer active.')
+        elif not display_name:
+            error_message = _('Display name is required.')
+        else:
+            try:
+                response = _CONTROL_CLIENT.redeem_temp_link(
+                    server_key=link.server_key,
+                    display_name=display_name,
+                    groups=link.groups_csv,
+                    expires_at=link.expires_at.isoformat(),
+                    link_token=link.token,
+                    requested_by=f'temp-link:{link.token[:12]}',
+                )
+            except BgSyncError as exc:
+                error_message = str(exc)
+            else:
+                link.use_count += 1
+                link.last_redeemed_at = now()
+                if link.max_uses is not None and link.use_count >= link.max_uses:
+                    link.is_active = False
+                link.save(update_fields=['use_count', 'last_redeemed_at', 'is_active', 'updated_at'])
+                credentials = {
+                    'server_label': response.get('server_name') or link.server_name,
+                    'address': response.get('address') or '',
+                    'username': response.get('username') or '',
+                    'display_name': response.get('display_name') or display_name,
+                    'password': response.get('password') or '',
+                }
+                usable = _temp_link_is_usable(link)
+
+    return render(
+        request,
+        'fg/temp_link_public.html',
+        {
+            'link': link,
+            'usable': usable,
+            'error_message': error_message,
+            'credentials': credentials,
+        },
+    )
 
 
 def _server_selector_value(server) -> str:

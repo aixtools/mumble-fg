@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Mumble Guest Access" %}{% endblock %}
+
+{% block content %}
+<div style="max-width: 48rem; margin: 0 auto;">
+    <h1>{% trans "Mumble Guest Access" %}</h1>
+    <p>{% trans "This page lets you claim temporary Mumble access from an invite link." %}</p>
+
+    <div style="padding: 1rem; border: 1px solid var(--border-color, #2f3640); border-radius: 8px; margin-bottom: 1rem;">
+        <div><strong>{% trans "Server" %}:</strong> {{ link.server_name }}</div>
+        <div><strong>{% trans "Expires" %}:</strong> {{ link.expires_at|date:"Y-m-d H:i" }}</div>
+        <div><strong>{% trans "Groups" %}:</strong> {{ link.groups_csv }}</div>
+    </div>
+
+    {% if error_message %}
+        <div class="alert alert-warning">{{ error_message }}</div>
+    {% endif %}
+
+    {% if credentials %}
+        <div style="padding: 1rem; border: 1px solid var(--border-color, #2f3640); border-radius: 8px;">
+            <h2 style="margin-top: 0;">{% trans "Your Mumble Credentials" %}</h2>
+            <div style="margin-bottom: 0.5rem;">
+                <strong>{% trans "Address" %}:</strong>
+                <code style="user-select: all;">{{ credentials.address }}</code>
+                <button type="button" class="btn btn-outline btn-xs" onclick="navigator.clipboard.writeText('{{ credentials.address|escapejs }}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+            </div>
+            <div style="margin-bottom: 0.5rem;">
+                <strong>{% trans "Username" %}:</strong>
+                <code style="user-select: all;">{{ credentials.username }}</code>
+                <button type="button" class="btn btn-outline btn-xs" onclick="navigator.clipboard.writeText('{{ credentials.username|escapejs }}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+            </div>
+            <div style="margin-bottom: 0.5rem;">
+                <strong>{% trans "Display Name" %}:</strong> {{ credentials.display_name }}
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <strong>{% trans "Password" %}:</strong>
+                <code style="user-select: all; overflow-wrap: anywhere;">{{ credentials.password }}</code>
+                <button type="button" class="btn btn-outline btn-xs" onclick="navigator.clipboard.writeText('{{ credentials.password|escapejs }}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" onclick="navigator.clipboard.writeText('Address: {{ credentials.address|escapejs }}\nUsername: {{ credentials.username|escapejs }}\nPassword: {{ credentials.password|escapejs }}');this.textContent='Copied All!';setTimeout(()=>this.textContent='Copy All',1500)">Copy All</button>
+        </div>
+    {% elif usable %}
+        <form method="post" style="padding: 1rem; border: 1px solid var(--border-color, #2f3640); border-radius: 8px;">
+            {% csrf_token %}
+            <label style="display: block; font-weight: 600; margin-bottom: 0.25rem;">{% trans "Display Name" %}</label>
+            <input type="text" name="display_name" maxlength="255" required style="width: 100%; padding: 0.45rem 0.6rem; margin-bottom: 1rem;">
+            <button type="submit" class="btn btn-primary">{% trans "Get Mumble Access" %}</button>
+        </form>
+    {% else %}
+        <div class="alert alert-warning">{% trans "This temp link is no longer active." %}</div>
+    {% endif %}
+</div>
+{% endblock %}

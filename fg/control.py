@@ -294,6 +294,42 @@ class BgControlClient:
             raise BgSyncError('Server inventory response did not include inventory')
         return response
 
+    def redeem_temp_link(
+        self,
+        *,
+        server_key: str,
+        display_name: str,
+        groups: str,
+        expires_at: str,
+        link_token: str,
+        requested_by: str | None = None,
+    ) -> dict[str, Any]:
+        response = _post_json(
+            '/v1/temp-links/redeem',
+            {
+                'server_key': str(server_key or '').strip(),
+                'display_name': str(display_name or '').strip(),
+                'groups': str(groups or '').strip(),
+                'expires_at': str(expires_at or '').strip(),
+                'link_token': str(link_token or '').strip(),
+            },
+            requested_by=requested_by,
+        )
+        if not isinstance(response.get('username'), str) or not response.get('username'):
+            raise BgSyncError('Temp link redemption did not return a username')
+        if not isinstance(response.get('password'), str) or not response.get('password'):
+            raise BgSyncError('Temp link redemption did not return a password')
+        return response
+
+    def revoke_temp_link(self, *, link_token: str, requested_by: str | None = None) -> dict[str, Any]:
+        return _post_json(
+            '/v1/temp-links/revoke',
+            {
+                'link_token': str(link_token or '').strip(),
+            },
+            requested_by=requested_by,
+        )
+
     def list_registrations(self) -> list[dict[str, Any]]:
         response = _get_json('/v1/registrations')
         registrations = response.get('registrations')

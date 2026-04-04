@@ -376,6 +376,64 @@ class MurmurInventorySnapshot(models.Model):
         return f'{self.server_key}:{self.server_name}'
 
 
+class TempLink(models.Model):
+    label = models.CharField(max_length=255, blank=True, default='')
+    token = models.CharField(max_length=64, unique=True)
+    server_key = models.CharField(max_length=255)
+    server_name = models.CharField(max_length=255, blank=True, default='')
+    groups_csv = models.TextField(blank=True, default='Guest')
+    max_uses = models.PositiveIntegerField(null=True, blank=True)
+    use_count = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    expires_at = models.DateTimeField()
+    last_redeemed_at = models.DateTimeField(null=True, blank=True)
+    created_by_username = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_temp_link'
+        ordering = ['-created_at', '-id']
+        default_permissions = ()
+        permissions = [
+            ('view_temp_links', 'Can view Mumble temp links'),
+            ('change_temp_links', 'Can change Mumble temp links'),
+            ('add_temp_links', 'Can add Mumble temp links'),
+            ('delete_temp_links', 'Can delete Mumble temp links'),
+        ]
+
+    def __str__(self) -> str:
+        return self.label or self.token
+
+
+class TempLinkSettings(models.Model):
+    """Singleton settings for temp link permissions."""
+
+    editor_groups = models.ManyToManyField(
+        'accounts.Group',
+        blank=True,
+        related_name='temp_link_settings',
+        help_text='Groups allowed to create and manage temp links',
+    )
+
+    class Meta:
+        db_table = 'fg_temp_link_settings'
+        verbose_name = 'Temp Link Settings'
+        verbose_name_plural = 'Temp Link Settings'
+
+    def __str__(self) -> str:
+        return 'Temp Link Settings'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 def append_access_rule_audit(
     *,
     action: str,
@@ -462,6 +520,7 @@ __all__ = [
     'PilotSnapshotHash',
     'ResolvedMurmurModels',
     'ControlChannelKeyEntry',
+    'TempLinkSettings',
     'access_rule_snapshot',
     'append_access_rule_audit',
     'resolve_murmur_model',

@@ -1,6 +1,7 @@
 import json
 
 from django.contrib import admin, messages
+from django.shortcuts import redirect
 from django.db.models import Q
 from django.http import JsonResponse
 from django.urls import path
@@ -20,7 +21,7 @@ from .models import (
     access_rule_snapshot,
     append_access_rule_audit,
 )
-from .models import MurmurModelLookupError, resolve_murmur_models
+from .models import MurmurModelLookupError, TempLinkSettings, resolve_murmur_models
 
 
 def _get_eve_character_model():
@@ -240,6 +241,18 @@ def _search_eve_entities(query, entity_type=None, limit=20):
                 })
 
     return results[:limit]
+
+
+@admin.register(TempLinkSettings)
+class TempLinkSettingsAdmin(admin.ModelAdmin):
+    filter_horizontal = ['editor_groups']
+
+    def has_add_permission(self, request):
+        return not TempLinkSettings.objects.exists()
+
+    def changelist_view(self, request, extra_context=None):
+        settings = TempLinkSettings.load()
+        return redirect(f'../templinksettings/{settings.pk}/change/')
 
 
 @admin.register(AccessRule)
