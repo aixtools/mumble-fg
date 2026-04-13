@@ -7,7 +7,9 @@ FG should not call background internals directly.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 import uuid
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
@@ -23,10 +25,75 @@ from fgbg_common.snapshot import PilotSnapshot
 
 REQUEST_TIMEOUT_SECONDS = 5
 CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:18080'
+HANDSHAKE_THROTTLE_SECONDS_FALLBACK = 120
+
+logger = logging.getLogger(__name__)
+_HANDSHAKE_THROTTLE_UNTIL_MONOTONIC = 0.0
+_HANDSHAKE_THROTTLE_REASON = ''
 
 
 class BgSyncError(RuntimeError):
     """Raised for control transport or rejected operations."""
+
+
+def _handshake_throttle_seconds() -> int:
+    configured = int(
+        getattr(
+            settings,
+            'MURMUR_CONTROL_HANDSHAKE_THROTTLE_SECONDS',
+            HANDSHAKE_THROTTLE_SECONDS_FALLBACK,
+        )
+    )
+    return max(configured, 0)
+
+
+def _active_handshake_throttle_error() -> str | None:
+    remaining = _HANDSHAKE_THROTTLE_UNTIL_MONOTONIC - time.monotonic()
+    if remaining <= 0:
+        return None
+    seconds = max(int(remaining), 1)
+    return (
+        f'Control handshake retry throttled for {seconds}s '
+        f'after failure: {_HANDSHAKE_THROTTLE_REASON}'
+    )
+
+
+def _set_handshake_throttle(reason: str) -> None:
+    global _HANDSHAKE_THROTTLE_UNTIL_MONOTONIC, _HANDSHAKE_THROTTLE_REASON  # noqa: PLW0603
+    duration = _handshake_throttle_seconds()
+    if duration <= 0:
+        return
+    _HANDSHAKE_THROTTLE_UNTIL_MONOTONIC = time.monotonic() + duration
+    _HANDSHAKE_THROTTLE_REASON = str(reason or 'unknown handshake failure')
+    logger.warning(
+        'FG/BG handshake failure detected; throttling control requests for %ss: %s',
+        duration,
+        _HANDSHAKE_THROTTLE_REASON,
+    )
+
+
+def clear_handshake_throttle() -> None:
+    global _HANDSHAKE_THROTTLE_UNTIL_MONOTONIC, _HANDSHAKE_THROTTLE_REASON  # noqa: PLW0603
+    _HANDSHAKE_THROTTLE_UNTIL_MONOTONIC = 0.0
+    _HANDSHAKE_THROTTLE_REASON = ''
+
+
+def _is_handshake_auth_failure(*, status_code: int, reason: str) -> bool:
+    if status_code in {401, 403}:
+        return True
+    if status_code != 400:
+        return False
+    lowered = str(reason or '').lower()
+    return 'authentication secret' in lowered or 'control key' in lowered
+
+
+def is_handshake_failure_error(exc: BaseException) -> bool:
+    lowered = str(exc or '').lower()
+    return (
+        'handshake' in lowered
+        or 'authentication secret' in lowered
+        or 'control endpoint unreachable' in lowered
+    )
 
 
 def _control_base_url() -> str:
@@ -100,6 +167,10 @@ def _request_json(
     allow_not_found: bool = False,
     sync_keys: bool = True,
 ) -> dict[str, Any]:
+    active_throttle = _active_handshake_throttle_error()
+    if active_throttle:
+        raise BgSyncError(active_throttle)
+
     url = f'{_control_base_url()}{path}'
     body = None
     if payload is not None:
@@ -130,11 +201,15 @@ def _request_json(
                 return parsed_error
             error_reason = str(parsed_error.get('message') or parsed_error.get('status') or error_reason)
 
+        if _is_handshake_auth_failure(status_code=exc.code, reason=error_reason):
+            _set_handshake_throttle(f'HTTP {exc.code}: {error_reason}')
         raise BgSyncError(f'Control request failed ({exc.code}): {error_reason}') from exc
     except URLError as exc:
+        _set_handshake_throttle(f'endpoint unreachable: {exc.reason}')
         raise BgSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
 
     result = _decode_json_response(raw)
+    clear_handshake_throttle()
 
     status = str(result.get('status', 'completed')).lower()
     allowed_statuses = {'accepted', 'completed', 'partial'}
@@ -600,4 +675,6 @@ class BgControlClient:
 __all__ = [
     'BgSyncError',
     'BgControlClient',
+    'clear_handshake_throttle',
+    'is_handshake_failure_error',
 ]

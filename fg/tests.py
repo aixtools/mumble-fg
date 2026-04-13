@@ -1,13 +1,17 @@
 import json
+import io
 from datetime import timedelta
 import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
+from urllib.error import URLError
 
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
+from django.core.management import call_command
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -26,9 +30,10 @@ from fg.pilot_snapshot import (
     serialize_pilot_snapshot,
 )
 from modules.corporation.models import CorporationSettings
-from fg.control import BgControlClient, BgSyncError, _post_json
+from fg.control import BgControlClient, BgSyncError, _post_json, clear_handshake_throttle
 from fg.models import (
     AccessRule,
+    ControlChannelKeyEntry,
     ENTITY_TYPE_ALLIANCE,
     ENTITY_TYPE_PILOT,
     MumbleUser,
@@ -453,6 +458,10 @@ class MumbleModelTest(TestCase):
 
 
 class ControlClientAuthTest(TestCase):
+    def tearDown(self):
+        clear_handshake_throttle()
+        return super().tearDown()
+
     @override_settings(BG_PSK='primary-control-secret')
     @patch('fg.control.urlopen')
     def test_post_json_sends_fgbg_psk_headers(self, mock_urlopen):
@@ -474,6 +483,53 @@ class ControlClientAuthTest(TestCase):
         request = mock_urlopen.call_args.args[0]
         self.assertEqual(request.get_header('X-fgbg-psk'), 'fallback-control-secret')
         self.assertEqual(request.get_header('X-murmur-control-psk'), 'fallback-control-secret')
+
+    @override_settings(
+        BG_PSK='fallback-control-secret',
+        MURMUR_CONTROL_HANDSHAKE_THROTTLE_SECONDS=60,
+    )
+    @patch('fg.control.urlopen')
+    def test_post_json_throttles_retries_after_unreachable_error(self, mock_urlopen):
+        mock_urlopen.side_effect = URLError('connection refused')
+
+        with self.assertRaises(BgSyncError) as first:
+            _post_json('/v1/test', {'pkid': 1}, requested_by='tester')
+        self.assertIn('Control endpoint unreachable', str(first.exception))
+
+        first_call_count = mock_urlopen.call_count
+        with self.assertRaises(BgSyncError) as second:
+            _post_json('/v1/test', {'pkid': 2}, requested_by='tester')
+        self.assertIn('retry throttled', str(second.exception))
+        self.assertEqual(mock_urlopen.call_count, first_call_count)
+
+
+class ResetFgBgHandshakeCommandTest(TestCase):
+    def tearDown(self):
+        clear_handshake_throttle()
+        return super().tearDown()
+
+    def test_reset_command_clears_fg_keyring_entries(self):
+        ControlChannelKeyEntry.objects.create(
+            key_id=uuid4(),
+            secret_ciphertext_b64='Zm9v',
+        )
+        self.assertEqual(ControlChannelKeyEntry.objects.count(), 1)
+
+        out = io.StringIO()
+        call_command('reset_fgbg_handshake', '--reset-handshake', stdout=out)
+
+        self.assertEqual(ControlChannelKeyEntry.objects.count(), 0)
+        self.assertIn('FG handshake reset complete', out.getvalue())
+
+    @patch('fg.management.commands.reset_fgbg_handshake.BgControlClient.bootstrap_control_key')
+    def test_reset_command_can_bootstrap_new_key(self, mock_bootstrap):
+        mock_bootstrap.return_value = '11111111-1111-1111-1111-111111111111'
+
+        out = io.StringIO()
+        call_command('reset_fgbg_handshake', '--reset-handshake', '--bootstrap', stdout=out)
+
+        self.assertIn('key_id=11111111-1111-1111-1111-111111111111', out.getvalue())
+        mock_bootstrap.assert_called_once_with(requested_by='fg.reset_fgbg_handshake')
 
 
 class LiveAdminSyncTest(TestCase):

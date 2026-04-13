@@ -33,7 +33,7 @@ from fgbg_common.entity_types import (
 )
 
 from .acl_sync import sync_acl_rules_to_bg
-from .control import BgControlClient, BgSyncError
+from .control import BgControlClient, BgSyncError, is_handshake_failure_error
 from .group_mapping import (
     all_cube_group_names,
     effective_groups_csv_for_user,
@@ -642,6 +642,7 @@ def _toggle_admin_for_registration(request, mumble_user):
             mumble_user.server_id,
             exc,
         )
+        _notify_superuser_handshake_failure(request, exc)
         messages.warning(
             request,
             _('Admin status was updated, but live Murmur session sync failed. Connected users may need to reconnect.'),
@@ -712,6 +713,7 @@ def _sync_contract_for_registration(request, mumble_user):
             mumble_user.server_id,
             exc,
         )
+        _notify_superuser_handshake_failure(request, exc)
         messages.warning(
             request,
             _('Contract metadata update request failed: %(error)s') % {'error': exc},
@@ -920,6 +922,20 @@ def _bg_unavailable_error(exc):
         or 'control request failed (502)' in lowered
         or 'control request failed (503)' in lowered
         or 'control request failed (504)' in lowered
+    )
+
+
+def _notify_superuser_handshake_failure(request, exc) -> None:
+    if not getattr(request.user, 'is_superuser', False):
+        return
+    if not is_handshake_failure_error(exc):
+        return
+    messages.warning(
+        request,
+        _(
+            'FG cannot handshake with BG control right now. '
+            'If this persists, reset FG/BG handshake state and bootstrap a new key.'
+        ),
     )
 
 
