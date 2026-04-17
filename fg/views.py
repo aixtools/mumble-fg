@@ -138,13 +138,6 @@ def _coerce_optional_int(value, *, field_name):
         raise BgSyncError(f'{field_name} must be an integer') from exc
 
 
-def _apply_probe_contract_view(mumble_user, probe_row):
-    mumble_user.contract_evepilot_id = probe_row.get('evepilot_id')
-    mumble_user.contract_corporation_id = probe_row.get('corporation_id')
-    mumble_user.contract_alliance_id = probe_row.get('alliance_id')
-    mumble_user.contract_kdf_iterations = probe_row.get('kdf_iterations')
-
-
 def _host_murmur_models_available() -> bool:
     try:
         resolve_murmur_models()
@@ -590,21 +583,6 @@ def mumble_manage(request):
         )
     )
     can_manage_contract = request.user.is_superuser
-    if can_manage_contract:
-        probe_rows_by_key = {}
-        for pkid in sorted({mumble_user.user_id for mumble_user in mumble_users}):
-            try:
-                registrations = _CONTROL_CLIENT.probe_pilot_registrations(pkid)
-            except BgSyncError as exc:
-                logger.warning('Failed to probe contract data for pkid=%s: %s', pkid, exc)
-                continue
-            for registration in registrations:
-                server_name = registration.get('server_name')
-                probe_rows_by_key[(pkid, server_name)] = registration
-
-        for mumble_user in mumble_users:
-            probe_row = probe_rows_by_key.get((mumble_user.user_id, mumble_user.server.name), {})
-            _apply_probe_contract_view(mumble_user, probe_row)
     return render(
         request,
         'fg/manage.html',
