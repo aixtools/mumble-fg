@@ -1524,6 +1524,96 @@ class TasksTest(TestCase):
         self.assertIn('Alliance_A', call_obj.groups)
         self.assertIn('Corp_A', call_obj.groups)
 
+    def test_update_all_mumble_groups_skips_orphan_registration(self):
+        """An orphan registration (user_id that no longer maps to a Django
+        user) must not abort the sweep for everyone else.
+        """
+        from fg.runtime import RuntimeRegistration, RuntimeServer
+        from fg.tasks import update_all_mumble_groups
+
+        server = RuntimeServer(id=1, name='Finland', address='voice.example.com:64738')
+        orphan = RuntimeRegistration(
+            user_id=99999,
+            server=server,
+            username='ghost',
+            display_name='Ghost',
+            is_active=True,
+            is_mumble_admin=False,
+            groups='',
+        )
+        orphan.user = SimpleNamespace(username='user-99999')
+        good = RuntimeRegistration(
+            user_id=self.user.pk,
+            server=server,
+            username='Test_Pilot',
+            display_name='Test Pilot',
+            is_active=True,
+            is_mumble_admin=False,
+            groups='',
+        )
+        good.user = self.user
+
+        mock_service = SimpleNamespace(
+            list_registrations=lambda **kw: [orphan, good],
+            attach_users=lambda regs: regs,
+        )
+        with patch('fg.tasks.get_runtime_service', return_value=mock_service), \
+             patch('fg.tasks._CONTROL_CLIENT.sync_live_admin_membership') as mock_sync:
+            update_all_mumble_groups()
+
+        self.assertEqual(mock_sync.call_count, 1)
+        self.assertEqual(mock_sync.call_args[0][0].user_id, self.user.pk)
+
+    def test_update_all_mumble_groups_isolates_per_user_errors(self):
+        """If one registration raises an unexpected error, the loop must
+        continue with the rest.
+        """
+        from fg.runtime import RuntimeRegistration, RuntimeServer
+        from fg.tasks import update_all_mumble_groups
+
+        server = RuntimeServer(id=1, name='Finland', address='voice.example.com:64738')
+        boom = RuntimeRegistration(
+            user_id=self.user.pk,
+            server=server,
+            username='Boom_Pilot',
+            display_name='Boom',
+            is_active=True,
+            is_mumble_admin=False,
+            groups='',
+        )
+        boom.user = self.user
+        good = RuntimeRegistration(
+            user_id=self.user.pk,
+            server=server,
+            username='Good_Pilot',
+            display_name='Good',
+            is_active=True,
+            is_mumble_admin=False,
+            groups='',
+        )
+        good.user = self.user
+
+        call_seq = []
+
+        def _compute(user, *, mumble_user, _config=None):
+            call_seq.append(mumble_user.username)
+            if mumble_user.username == 'Boom_Pilot':
+                raise RuntimeError('simulated downstream failure')
+            return 'Alliance_A,Corp_A,Member'
+
+        mock_service = SimpleNamespace(
+            list_registrations=lambda **kw: [boom, good],
+            attach_users=lambda regs: regs,
+        )
+        with patch('fg.tasks.get_runtime_service', return_value=mock_service), \
+             patch('fg.tasks.effective_groups_csv_for_user', side_effect=_compute), \
+             patch('fg.tasks._CONTROL_CLIENT.sync_live_admin_membership') as mock_sync:
+            update_all_mumble_groups()
+
+        self.assertEqual(call_seq, ['Boom_Pilot', 'Good_Pilot'])
+        self.assertEqual(mock_sync.call_count, 1)
+        self.assertEqual(mock_sync.call_args[0][0].username, 'Good_Pilot')
+
     def test_update_skips_inactive(self):
         self.mu.is_active = False
         self.mu.save()
