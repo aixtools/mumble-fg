@@ -53,7 +53,16 @@ def update_mumble_groups(mumble_user_id):
 
 def _update_registration_groups(registration, *, config):
     user = registration.user
-    if user is None:
+    # attach_users falls back to a SimpleNamespace when the registration's
+    # user_id doesn't match a real Django user. That placeholder is fine for
+    # display paths, but group computation queries against it fail downstream.
+    # Skip orphans here so a handful of stale rows don't poison the sync.
+    if user is None or getattr(user, 'pk', None) is None:
+        logger.warning(
+            'Skipping group sync for orphan registration %s (user_id=%s): '
+            'no matching Django user',
+            registration.username, registration.user_id,
+        )
         return
     new_groups = effective_groups_csv_for_user(user, mumble_user=registration, _config=config)
     if registration.groups != new_groups:
@@ -78,7 +87,16 @@ def update_all_mumble_groups():
     logger.info('Running mumble group updates for %d active registrations from BG', len(active))
     config = build_group_mapping_config()
     for registration in active:
-        _update_registration_groups(registration, config=config)
+        try:
+            _update_registration_groups(registration, config=config)
+        except Exception:
+            # Defense in depth: one misbehaving registration must not abort
+            # the whole sweep. The orphan filter above is the expected path;
+            # this catches anything unexpected.
+            logger.exception(
+                'Group sync failed for registration %s (user_id=%s); continuing',
+                registration.username, registration.user_id,
+            )
 
 
 @shared_task(ignore_result=True)
