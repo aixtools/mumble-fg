@@ -52,7 +52,17 @@ jobs:
           home_dir = str(payload.get("home_dir", "")).strip()
           project_dir = str(payload.get("project_dir", "")).strip()
           env_file = str(payload.get("env_file", "")).strip()
-          service_units = payload.get("service_units", [])
+          # When the operator omits service_units, fall back to the Cube stack
+          # so a post-deploy restart happens by default. Reloading these units
+          # is what picks up new FG bytecode; without it the editable install
+          # sits on disk while gunicorn/celery keep running the old code.
+          _default_service_units = [
+              "cube-django",
+              "cube-celery",
+              "cube-celery-beat",
+              "cube-celery-discord",
+          ]
+          service_units = payload.get("service_units", _default_service_units)
           port = str(payload.get("port", "22")).strip()
           if not port:
               port = "22"
