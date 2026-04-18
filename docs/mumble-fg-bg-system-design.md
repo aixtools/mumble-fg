@@ -91,7 +91,7 @@ BG is a Django-backed service with multiple roles:
 
 Murmur provides:
 
-- registered-user storage and login path
+- registered-user storage and runtime connection endpoint
 - ICE control plane
 - live channel, group, ACL, and session state
 
@@ -511,12 +511,14 @@ BG stores Murmur password records using:
 - FG can encrypt a requested plaintext password with BG’s public key.
 - BG decrypts it if BG crypto is configured.
 - BG updates its own password record.
-- BG attempts to push the same plaintext password to Murmur registration state.
-- BG returns `completed` or `partial` depending on ICE reachability and sync outcome.
+- FG profile/self-service password actions currently use the user-by-`pkid` reset flow, which asks BG to skip Murmur sqlite sync.
+- In that flow, BG stores the password hash locally and returns `completed` with Murmur sync skipped.
+- Other BG password/reset paths can still attempt Murmur registration sync over ICE and may return `partial` on ICE failure.
 
 Important semantic rule:
 
 - BG is the source of truth for runtime password material.
+- When ICE authd is active, BG authd is the authoritative login path; Murmur sqlite registration state is fallback or compatibility state.
 
 ## 11. Temp-Link Flow
 
