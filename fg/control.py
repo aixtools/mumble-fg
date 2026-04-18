@@ -544,10 +544,18 @@ class BgControlClient:
         pkid: int | None = None,
         requested_by: str | None = None,
     ) -> dict[str, Any]:
-        """Send password reset to BG by user pkid — BG resolves server/registration."""
+        """Send password reset to BG by user pkid — BG resolves server/registration.
+
+        `skip_murmur_sync` tells BG not to push the new hash into Murmur's
+        sqlite over ICE. BG's authd is authoritative for user authentication,
+        and Murmur's sqlite row is only a fallback for when ICE auth is
+        disabled. Skipping the ICE roundtrip keeps resets fast and immune to
+        flaky/remote Murmur ICE endpoints.
+        """
         resolved_pkid = int(pkid) if pkid is not None else int(user.pk)
         payload = {
             'pkid': resolved_pkid,
+            'skip_murmur_sync': True,
         }
         if password is not None:
             from fg.crypto import is_available as crypto_available, encrypt_password
