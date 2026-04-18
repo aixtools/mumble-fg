@@ -604,6 +604,37 @@ class LiveAdminSyncTest(TestCase):
         self.assertEqual(synced_sessions, 4)
 
 
+class ResetPasswordClientTest(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user('resetpilot', password='pass')
+        self.control_client = BgControlClient()
+
+    @patch('fg.control._post_json')
+    def test_reset_password_sets_skip_murmur_sync(self, mock_post_json):
+        mock_post_json.return_value = {'status': 'completed'}
+
+        self.control_client.reset_password_for_user(self.user, requested_by='tester')
+
+        mock_post_json.assert_called_once()
+        path, payload = mock_post_json.call_args.args
+        self.assertEqual(path, '/v1/password-reset')
+        self.assertEqual(payload['pkid'], self.user.pk)
+        self.assertTrue(payload['skip_murmur_sync'])
+
+    @patch('fg.control._post_json')
+    def test_reset_password_with_explicit_password_still_skips_murmur_sync(self, mock_post_json):
+        mock_post_json.return_value = {'status': 'completed'}
+
+        with patch('fg.crypto.is_available', return_value=False):
+            self.control_client.reset_password_for_user(
+                self.user, password='newpass', requested_by='tester',
+            )
+
+        _, payload = mock_post_json.call_args.args
+        self.assertTrue(payload['skip_murmur_sync'])
+        self.assertEqual(payload['password'], 'newpass')
+
+
 class ContractMetadataSyncTest(TestCase):
     def setUp(self):
         self.server = _make_server()
