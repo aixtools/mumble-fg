@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__)
 _private_key = None
 _public_key_pem: bytes | None = None
 _initialized = False
+_startup_status: dict[str, Any] = {
+    "private_key_path_present": False,
+    "private_key_exists": False,
+    "public_key_path_present": False,
+    "public_key_exists": False,
+    "passphrase_present": False,
+    "can_decrypt": False,
+    "failure_reason": "",
+}
 
 
 def initialize(*, private_key_path: str | None = None, public_key_path: str | None = None) -> bool:
@@ -57,12 +66,25 @@ def initialize(*, private_key_path: str | None = None, public_key_path: str | No
         except Exception:
             passphrase = None
 
+    _startup_status.update(
+        {
+            "private_key_path_present": bool(private_key_path),
+            "private_key_exists": False,
+            "public_key_path_present": bool(public_key_path),
+            "public_key_exists": False,
+            "passphrase_present": passphrase is not None,
+            "can_decrypt": False,
+            "failure_reason": "",
+        }
+    )
+
     if not private_key_path:
         _initialized = True
         logger.info("No FG_PRIVATE_KEY_PATH configured — FG PKI disabled")
         return False
 
     key_path = Path(private_key_path)
+    _startup_status["private_key_exists"] = key_path.exists()
     if not key_path.exists():
         _initialized = True
         logger.info("FG private key not found at %s — FG PKI disabled", key_path)
@@ -71,14 +93,20 @@ def initialize(*, private_key_path: str | None = None, public_key_path: str | No
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
     raw_private = key_path.read_bytes()
-    _private_key = load_pem_private_key(raw_private, password=passphrase)
+    try:
+        _private_key = load_pem_private_key(raw_private, password=passphrase)
+    except Exception as exc:
+        _startup_status["failure_reason"] = str(exc)
+        raise
 
     # Optional public key PEM (used when requesting BG key exports)
     if public_key_path:
         pub_path = Path(public_key_path)
+        _startup_status["public_key_exists"] = pub_path.exists()
         if pub_path.exists():
             _public_key_pem = pub_path.read_bytes()
     _initialized = True
+    _startup_status["can_decrypt"] = True
     return True
 
 
@@ -121,3 +149,11 @@ def status() -> dict[str, Any]:
         "can_decrypt": can_decrypt(),
     }
 
+
+def startup_status() -> dict[str, Any]:
+    details = dict(_startup_status)
+    details["initialized"] = _initialized
+    details["has_private_key"] = _private_key is not None
+    details["has_public_key"] = _public_key_pem is not None
+    details["can_decrypt"] = can_decrypt()
+    return details

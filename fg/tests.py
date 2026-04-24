@@ -502,7 +502,6 @@ class ControlClientAuthTest(TestCase):
         self.assertIn('retry throttled', str(second.exception))
         self.assertEqual(mock_urlopen.call_count, first_call_count)
 
-
 class ResetFgBgHandshakeCommandTest(TestCase):
     def tearDown(self):
         clear_handshake_throttle()

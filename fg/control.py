@@ -58,17 +58,28 @@ def _active_handshake_throttle_error() -> str | None:
     )
 
 
-def _set_handshake_throttle(reason: str) -> None:
+def _set_handshake_throttle(reason: str, *, context: dict[str, Any] | None = None) -> None:
     global _HANDSHAKE_THROTTLE_UNTIL_MONOTONIC, _HANDSHAKE_THROTTLE_REASON  # noqa: PLW0603
     duration = _handshake_throttle_seconds()
     if duration <= 0:
         return
     _HANDSHAKE_THROTTLE_UNTIL_MONOTONIC = time.monotonic() + duration
     _HANDSHAKE_THROTTLE_REASON = str(reason or 'unknown handshake failure')
+    context = context or {}
     logger.warning(
-        'FG/BG handshake failure detected; throttling control requests for %ss: %s',
+        'FG/BG handshake failure detected; throttling control requests for %ss: %s '
+        'auth_mode=%s rolling_key_count_local=%s fg_pki_can_decrypt=%s '
+        'bg_psk_present=%s selected_key_id=%s path=%s base_url=%s rolling_key_error=%s',
         duration,
         _HANDSHAKE_THROTTLE_REASON,
+        context.get('auth_mode'),
+        context.get('rolling_key_count_local'),
+        context.get('fg_pki_can_decrypt'),
+        context.get('bg_psk_present'),
+        context.get('selected_key_id'),
+        context.get('path'),
+        context.get('base_url'),
+        context.get('rolling_key_error'),
     )
 
 
@@ -114,24 +125,44 @@ def _control_timeout() -> int:
     return int(getattr(settings, 'MURMUR_CONTROL_TIMEOUT_SECONDS', REQUEST_TIMEOUT_SECONDS))
 
 
-def _control_headers(*, content_type_json: bool = False) -> dict[str, str]:
+def _control_auth_snapshot() -> dict[str, Any]:
+    return {
+        'auth_mode': 'none',
+        'rolling_key_count_local': control_keyring.ControlChannelKeyEntry.objects.count(),
+        'fg_pki_can_decrypt': fg_pki.can_decrypt(),
+        'bg_psk_present': bool(
+            (os.getenv('BG_PSK', '').strip() or getattr(settings, 'BG_PSK', None) or '').strip()
+        ),
+        'selected_key_id': None,
+        'rolling_key_error': None,
+    }
+
+
+def _control_headers_with_diagnostics(*, content_type_json: bool = False) -> tuple[dict[str, str], dict[str, Any]]:
     headers: dict[str, str] = {}
+    snapshot = _control_auth_snapshot()
     if content_type_json:
         headers['Content-Type'] = 'application/json'
 
     # Prefer youngest session key in FG keyring (normal mode).
-    for key_id, secret in control_keyring.decrypt_active_keypairs(limit=1):
-        headers['X-BG-KEY-ID'] = str(key_id)
-        headers['X-FGBG-PSK'] = secret
-        headers['X-Murmur-Control-PSK'] = secret
-        return headers
+    try:
+        for key_id, secret in control_keyring.decrypt_active_keypairs(limit=1):
+            snapshot['auth_mode'] = 'rolling'
+            snapshot['selected_key_id'] = str(key_id)
+            headers['X-BG-KEY-ID'] = str(key_id)
+            headers['X-FGBG-PSK'] = secret
+            headers['X-Murmur-Control-PSK'] = secret
+            return headers, snapshot
+    except Exception as exc:  # noqa: BLE001
+        snapshot['rolling_key_error'] = str(exc)
 
     # Fallback: bootstrap PSK (installation / break-glass only).
     shared_secret = (os.getenv('BG_PSK', '').strip() or getattr(settings, 'BG_PSK', None) or '').strip()
     if shared_secret:
+        snapshot['auth_mode'] = 'psk'
         headers['X-FGBG-PSK'] = shared_secret
         headers['X-Murmur-Control-PSK'] = shared_secret
-    return headers
+    return headers, snapshot
 
 
 def _control_envelope(payload: dict[str, Any], *, requested_by: str | None) -> dict[str, Any]:
@@ -175,11 +206,28 @@ def _request_json(
     body = None
     if payload is not None:
         body = json.dumps(_control_envelope(payload, requested_by=requested_by)).encode('utf-8')
+    headers, auth_snapshot = _control_headers_with_diagnostics(content_type_json=payload is not None)
+    auth_snapshot['path'] = path
+    auth_snapshot['base_url'] = _control_base_url()
+    if auth_snapshot.get('auth_mode') == 'none':
+        logger.warning(
+            'FG/BG control request has no authentication secret: auth_mode=%s '
+            'rolling_key_count_local=%s fg_pki_can_decrypt=%s bg_psk_present=%s '
+            'selected_key_id=%s path=%s base_url=%s rolling_key_error=%s',
+            auth_snapshot.get('auth_mode'),
+            auth_snapshot.get('rolling_key_count_local'),
+            auth_snapshot.get('fg_pki_can_decrypt'),
+            auth_snapshot.get('bg_psk_present'),
+            auth_snapshot.get('selected_key_id'),
+            auth_snapshot.get('path'),
+            auth_snapshot.get('base_url'),
+            auth_snapshot.get('rolling_key_error'),
+        )
     request = Request(
         url,
         data=body,
         method=method,
-        headers=_control_headers(content_type_json=payload is not None),
+        headers=headers,
     )
     try:
         with urlopen(request, timeout=_control_timeout()) as response:
@@ -202,10 +250,10 @@ def _request_json(
             error_reason = str(parsed_error.get('message') or parsed_error.get('status') or error_reason)
 
         if _is_handshake_auth_failure(status_code=exc.code, reason=error_reason):
-            _set_handshake_throttle(f'HTTP {exc.code}: {error_reason}')
+            _set_handshake_throttle(f'HTTP {exc.code}: {error_reason}', context=auth_snapshot)
         raise BgSyncError(f'Control request failed ({exc.code}): {error_reason}') from exc
     except URLError as exc:
-        _set_handshake_throttle(f'endpoint unreachable: {exc.reason}')
+        _set_handshake_throttle(f'endpoint unreachable: {exc.reason}', context=auth_snapshot)
         raise BgSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
 
     result = _decode_json_response(raw)
