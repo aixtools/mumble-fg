@@ -6,25 +6,42 @@ This directory is the canonical documentation location for this repository.
 
 Primary reference:
 
-- [consolidated.md](./consolidated.md) — current intent, architecture, and operational notes.
-- [conventions.md](./conventions.md) — shared FG/BG naming and boundary conventions.
-- [deploy_manual.md](./deploy_manual.md) — manual installation into a host application.
-- [deploy_workflow.md](./deploy_workflow.md) — current GitHub Actions deployment behavior.
-- [fg-bg-contracts.md](./fg-bg-contracts.md) — explicit and implicit FG/BG integration contracts.
-- [fg-bg-integration-smoke.md](./fg-bg-integration-smoke.md) — smoke checklist after deploy or integration changes.
-- [profile-panel-wireframe.md](./profile-panel-wireframe.md) — markdown sketch of the current `/profile/` Mumble panel.
-- [pilot-backup-restore-probe.md](./pilot-backup-restore-probe.md) — restoreability probe for host-side `PILOT_DBMS` backups.
-- [design_spec.md](./design_spec.md) — implementation contract and intended steady-state design.
-- [mumble-fg-bg-system-design.md](./mumble-fg-bg-system-design.md) — after-the-fact architecture summary.
+- [design.md](./design.md) — current architecture, contracts, permissions, and profile-panel behavior.
+- [operations.md](./operations.md) — deployment, workflow behavior, smoke checks, and restoreability probe.
 
-Feature-specific planning docs retained in this directory:
+## Scope
 
-- [group_mapping_v1_plan.md](./group_mapping_v1_plan.md)
-- [group_mapping_v1_plan.json](./group_mapping_v1_plan.json)
+- `mumble-fg` is the host-facing UI/Admin integration layer.
+- `mumble-bg` is the separate runtime daemon/runtime-auth layer.
+- `mumble-fg` owns host-facing Mumble operator and pilot UI.
+- Runtime actions that affect Murmur state are expected to flow through BG control/probe contracts when host models are unavailable.
 
-Historical documents are archived in:
+- Host/admin pages:
+  - `Mumble Controls` surfaces:
+    - `Accessibility`
+    - `Groups`
+    - `Links`
+  - ACL panel and permission checks.
+- Profile-side password reset controls and profile panel entries.
+- Contract adapters for BG control/probe communications.
+- Pilot snapshot export and FG-side cache state for BG synchronization.
+- Django tests that can run in both mocked host and full host-compatible environments.
 
-- [history/mumble-fg](../../repository/history/mumble-fg)
+## Working assumptions
 
-Keep the files above aligned with current code and workflows, and treat files under
-`history/` as read-only history.
+- FG is the only side that reads `PILOT_DBMS`
+- BG receives pilot snapshot data over control APIs
+- FG should be the only package installed in `mockcube`
+- `mockcube` should not import BG ORM models directly for FG admin/operator flows
+- Superuser and FG module permissions are the primary admin gate for control-surface actions
+- `Links` can also be granted through configured temp-link editor groups
+
+## Operator checklist
+
+1. Read this document before modifying any FG integration flow.
+2. Verify `mumble-ui` mount and extension wiring are aligned in host.
+3. Ensure BG endpoints are reached through explicit control URL and secret settings.
+4. Keep mockcube-compatible compatibility shims minimal and explicit.
+5. If a test or code path depends on host Murmur tables, mark/guard accordingly.
+
+Keep the files above aligned with current code and workflows.
