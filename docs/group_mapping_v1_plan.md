@@ -1,5 +1,7 @@
 # FG/BG Murmur Group Mapping UI v1
 
+Verified: plan document reviewed against `mumble-fg` `main` version `0.3.7.dev1` on `2026-04-24`; retained as implementation-planning history, not as the primary current contract.
+
 ## Summary
 
 Build an FG operator UI for global `Cube group -> Murmur group` mapping with per-server Murmur inventory visibility. BG remains a per-server Murmur bridge and never merges server state. FG stores mapping intent, ignore state, and imported per-server inventory snapshots; it renders divergence and suppressed mappings when either a Cube group or a Murmur group is ignored. Naming should be explicit: use `is_mumble_admin` / `_is_mumble_admin`, not generic `is_admin`.

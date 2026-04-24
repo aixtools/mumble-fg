@@ -1,5 +1,7 @@
 # Manual Deployment
 
+Verified: `mumble-fg` `main` version `0.3.7.dev1` on `2026-04-24`.
+
 This document covers manual installation of `mumble-fg` into a host application such as Cube.
 
 ## 1. Preconditions

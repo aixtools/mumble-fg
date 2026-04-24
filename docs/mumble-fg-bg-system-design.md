@@ -1,5 +1,7 @@
 # Mumble FG/BG System Design (After-the-Fact)
 
+Verified: `mumble-fg` `main` version `0.3.7.dev1` on `2026-04-24`.
+
 ## Scope
 
 This document describes the current FG/BG Mumble split as implemented across:

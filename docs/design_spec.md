@@ -1,5 +1,7 @@
 # FG/BG Design Specification
 
+Verified: `mumble-fg` `main` version `0.3.7.dev1` on `2026-04-24`.
+
 This document is written as the design contract the FG/BG split is expected to satisfy.
 
 ## 1. Purpose
@@ -65,6 +67,7 @@ Additional rules:
 FG SHALL provide:
 
 - ACL CRUD and audit UI
+- `Mumble Controls` operator surfaces (`Accessibility`, `Groups`, `Links`) as implemented and permissioned
 - sync actions that push ACL and pilot snapshot state to BG
 - the `/profile/` Mumble panel
 - host integration hooks for Cube or Cube-like hosts
@@ -99,13 +102,16 @@ Control authentication:
 
 The panel SHALL be visible only when the pilot account is eligible.
 
-If BG exposes more than one available server for the same pilot account:
+Current implementation behavior:
 
-- FG SHALL show one panel with a `Server` selector.
-- Selector option text SHALL come from the BG server label/name, not from a raw endpoint unless no label exists.
+- FG renders one panel per available BG server.
+- Each panel shows a fixed-text `Server` field derived from the BG server label/name.
+- If more than one eligible pilot is available, FG shows a `Mumble Authentication` selector for pilot choice.
 
 The panel SHALL display:
 
+- `Server`
+- `Display Name`
 - `Username`
 - `Address`
 - `Port`
@@ -118,9 +124,10 @@ Target layout:
 ```text
 +------------------------------------------------------------------+
 | MUMBLE                                                           |
-| Server [ Country 1 v ]                                           |
 |------------------------------------------------------------------|
-| Username   [ALLY CORP] Pilot Main                                |
+| Server      Finland                                              |
+| Display Name [ALLY CORP] Pilot Main                              |
+| Username    pilot_main                                           |
 | Address    voice.example.org                                     |
 | Port       64738                                                 |
 | IsAdmin    Yes                                                   |
