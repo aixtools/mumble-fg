@@ -1,0 +1,119 @@
+name: Reveal mumble-fg secrets (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reveal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve deploy target
+        env:
+          TARGETHOST: ${{ secrets.TARGETHOST }}
+          TARGETUSER: ${{ secrets.TARGETUSER }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def _parse_target_payload(raw: str, secret_name: str) -> dict:
+              try:
+                  payload = json.loads(raw)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f"{secret_name} must be valid JSON") from exc
+
+              if not isinstance(payload, dict):
+                  raise SystemExit(f"Secret {secret_name} must be a JSON object")
+              return payload
+
+          host = str(os.environ.get("TARGETHOST", "")).strip()
+          raw = os.environ.get("TARGETUSER", "").strip()
+          if not host:
+              raise SystemExit("TARGETHOST is empty")
+          if not raw:
+              raise SystemExit("TARGETUSER is empty")
+
+          payload = _parse_target_payload(raw, "TARGETUSER")
+
+          user = str(payload.get("user", "")).strip()
+          key = payload.get("key", "")
+          home_dir = str(payload.get("home_dir", "")).strip()
+          env_file = str(payload.get("env_file", "")).strip()
+          port = str(payload.get("port", "22")).strip() or "22"
+          cube_project_dir = str(payload.get("cube_project_dir", "")).strip()
+
+          if not user:
+              raise SystemExit("TARGETUSER missing required field: user")
+          if not isinstance(key, str) or not key.strip():
+              raise SystemExit("TARGETUSER missing required field: key")
+          if not home_dir:
+              home_dir = f"/home/{user}"
+          if not cube_project_dir:
+              if env_file:
+                  cube_project_dir = str(Path(env_file).resolve().parent)
+              else:
+                  cube_project_dir = f"{home_dir}/Cube"
+
+          key_path = Path.home() / ".ssh" / "deploy_key"
+          key_path.write_text(key.replace("\\n", "\n").rstrip() + "\n", encoding="utf-8")
+          key_path.chmod(0o600)
+
+          github_env = Path(os.environ["GITHUB_ENV"])
+          with github_env.open("a", encoding="utf-8") as fh:
+              fh.write(f"DEPLOY_TARGET_HOST={host}\n")
+              fh.write(f"DEPLOY_TARGET_USER={user}\n")
+              fh.write(f"DEPLOY_TARGET_PORT={port}\n")
+              fh.write(f"DEPLOY_HOME_DIR={home_dir}\n")
+              fh.write(f"DEPLOY_ENV_FILE={env_file}\n")
+              fh.write(f"DEPLOY_CUBE_PROJECT_DIR={cube_project_dir}\n")
+          PY
+
+      - name: Set up SSH known hosts
+        run: |
+          set -euo pipefail
+          ssh-keyscan -p "${DEPLOY_TARGET_PORT}" -H "${DEPLOY_TARGET_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Reveal FG_PKI_PASSPHRASE on target host
+        env:
+          FG_PKI_PASSPHRASE_SECRET: ${{ secrets.FG_PKI_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FG_PKI_PASSPHRASE_SECRET:-}" ]; then
+            echo "FG_PKI_PASSPHRASE secret is empty." >&2
+            exit 1
+          fi
+
+          FG_PKI_PASSPHRASE_SECRET_B64="$(printf '%s' "${FG_PKI_PASSPHRASE_SECRET}" | base64 | tr -d '\n')"
+
+          REVEAL_TARGET_ENV="${DEPLOY_CUBE_PROJECT_DIR}/.env"
+
+          ssh -p "${DEPLOY_TARGET_PORT}" -i ~/.ssh/deploy_key "${DEPLOY_TARGET_USER}@${DEPLOY_TARGET_HOST}" \
+            "REVEAL_SECRET_B64='${FG_PKI_PASSPHRASE_SECRET_B64}' REVEAL_TARGET_ENV='${REVEAL_TARGET_ENV}' bash -s" <<'EOF'
+          set -euo pipefail
+          umask 077
+
+          REVEAL_SECRET="$(printf '%s' "${REVEAL_SECRET_B64}" | base64 -d)"
+          printf '%s\n' "${REVEAL_SECRET}" > /tmp/fg_pki_passphrase.secret
+          printf '%s\n' "${REVEAL_SECRET_B64}" > /tmp/fg_pki_passphrase.secret.b64
+          printf '%s\n' "${REVEAL_TARGET_ENV}" > /tmp/fg_pki_passphrase.target_env
+          {
+            printf 'target_env=%s\n' "${REVEAL_TARGET_ENV}"
+            printf 'secret=%s\n' "${REVEAL_SECRET}"
+            printf 'secret_b64=%s\n' "${REVEAL_SECRET_B64}"
+          } > /tmp/fg_pki_passphrase.reveal
+
+          ls -l /tmp/fg_pki_passphrase.secret /tmp/fg_pki_passphrase.secret.b64 /tmp/fg_pki_passphrase.target_env /tmp/fg_pki_passphrase.reveal
+          EOF
+
+      - name: Report reveal target
+        run: |
+          echo "FG_PKI_PASSPHRASE was written on ${DEPLOY_TARGET_HOST} to:"
+          echo "  /tmp/fg_pki_passphrase.secret"
+          echo "  /tmp/fg_pki_passphrase.secret.b64"
+          echo "  /tmp/fg_pki_passphrase.target_env"
+          echo "  /tmp/fg_pki_passphrase.reveal"
