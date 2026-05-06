@@ -613,6 +613,27 @@ class BgControlClient:
                 payload['password'] = password
         return _post_json('/v1/password-reset', payload, requested_by=requested_by)
 
+    def clear_certhash_for_user(
+        self,
+        user,
+        server_id: int,
+        *,
+        pkid: int | None = None,
+        requested_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Clear the stored Murmur certhash for ``(user_id, server_id)`` on BG.
+
+        Murmur reads ``certhash`` lazily on next reconnect, so no ICE call is
+        needed — the next time the user connects with their cert, Murmur will
+        rebind it. Raises :class:`BgSyncError` on transport / non-2xx error.
+        """
+        resolved_pkid = int(pkid) if pkid is not None else int(user.pk)
+        payload = {
+            'pkid': resolved_pkid,
+            'server_id': int(server_id),
+        }
+        return _post_json('/v1/clear-certhash', payload, requested_by=requested_by)
+
     def sync_registration_contract(
         self,
         mumble_user,

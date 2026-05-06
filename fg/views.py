@@ -567,6 +567,22 @@ def _can_manage_mumble_admin(user):
     return _can_manage_mumble(user)
 
 
+def _can_act_as_mumble_moderator(user):
+    """Authorization for cross-user moderator endpoints (Cube Edit-User page).
+
+    Either credential is sufficient — a Cube cube-admin who is not a Mumble
+    admin can fix everyday user state, and a Mumble admin who is not a Cube
+    moderator retains the existing FG admin surface.
+    """
+    if not user.is_authenticated:
+        return False
+    if user.is_staff or user.is_superuser:
+        return True
+    if user.groups.filter(name='cube-admin').exists():
+        return True
+    return user.has_perm('mumble.manage_mumble_admin') or user.has_perm('mumble_fg.manage_mumble_admin')
+
+
 @login_required
 def mumble_manage(request):
     if not _can_manage_mumble(request.user):
@@ -735,6 +751,92 @@ def sync_contract_registration(request, pkid: int, server_id: int):
         if mumble_user is None:
             raise Http404()
     return _sync_contract_for_registration(request, mumble_user)
+
+
+# ---------------------------------------------------------------------------
+# Cube cube-admin moderator endpoints
+# ---------------------------------------------------------------------------
+
+
+@require_POST
+@login_required
+def admin_reset_password_for_user(request, user_id: int, server_id: int):
+    """Force-reset another user's Murmur password on a specific server.
+
+    Used by the Cube Edit-User page (cube_admin module). Returns the new
+    password once in JSON; the caller is responsible for displaying it and
+    not persisting it. Permission gate accepts either Cube cube-admin
+    membership or the existing ``mumble_fg.manage_mumble_admin`` perm.
+    """
+    if not _can_act_as_mumble_moderator(request.user):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    if _host_murmur_models_available():
+        mumble_user = get_object_or_404(MumbleUser, user_id=user_id, server_id=server_id)
+    else:
+        mumble_user = _runtime_registration(user_id, server_id=server_id)
+        if mumble_user is None:
+            return JsonResponse({'error': 'not_found'}, status=404)
+
+    requested_by = f'cube_admin:{request.user.pk}'
+    try:
+        response = _CONTROL_CLIENT.reset_password_for_user(
+            mumble_user.user if hasattr(mumble_user, 'user') and mumble_user.user else None,
+            pkid=user_id,
+            requested_by=requested_by,
+        )
+    except BgSyncError as exc:
+        logger.warning(
+            'cube-admin password reset failed for user_id=%s server_id=%s: %s',
+            user_id, server_id, exc,
+        )
+        return JsonResponse({'error': 'bg_sync_failed', 'detail': str(exc)}, status=502)
+
+    password = response.get('password')
+    if not password:
+        return JsonResponse({'error': 'no_password_in_response'}, status=502)
+
+    return JsonResponse({
+        'password': password,
+        'server_id': server_id,
+        'username': getattr(mumble_user, 'username', '') or '',
+    })
+
+
+@require_POST
+@login_required
+def admin_clear_certhash(request, user_id: int, server_id: int):
+    """Clear another user's stored Murmur certhash on a specific server.
+
+    Murmur reads ``certhash`` lazily on next reconnect, so the next time
+    the user connects with a cert, Murmur will rebind it. Same permission
+    gate as :func:`admin_reset_password_for_user`.
+    """
+    if not _can_act_as_mumble_moderator(request.user):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    if _host_murmur_models_available():
+        get_object_or_404(MumbleUser, user_id=user_id, server_id=server_id)
+    else:
+        if _runtime_registration(user_id, server_id=server_id) is None:
+            return JsonResponse({'error': 'not_found'}, status=404)
+
+    requested_by = f'cube_admin:{request.user.pk}'
+    try:
+        _CONTROL_CLIENT.clear_certhash_for_user(
+            request.user,
+            server_id,
+            pkid=user_id,
+            requested_by=requested_by,
+        )
+    except BgSyncError as exc:
+        logger.warning(
+            'cube-admin clear certhash failed for user_id=%s server_id=%s: %s',
+            user_id, server_id, exc,
+        )
+        return JsonResponse({'error': 'bg_sync_failed', 'detail': str(exc)}, status=502)
+
+    return JsonResponse({'ok': True})
 
 
 # ---------------------------------------------------------------------------
