@@ -24,6 +24,16 @@ urlpatterns = [
         name='sync_contract_registration',
     ),
     path('controls/', views.mumble_controls, name='controls'),
+    path(
+        'admin/users/<int:user_id>/servers/<int:server_id>/password-reset/',
+        views.admin_reset_password_for_user,
+        name='admin_reset_password_for_user',
+    ),
+    path(
+        'admin/users/<int:user_id>/servers/<int:server_id>/clear-certhash/',
+        views.admin_clear_certhash,
+        name='admin_clear_certhash',
+    ),
     path('acl/', views.acl_list, name='acl_list'),
     path('acl/search/', views.acl_search, name='acl_search'),
     path('acl/batch-create/', views.acl_batch_create, name='acl_batch_create'),

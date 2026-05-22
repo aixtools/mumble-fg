@@ -23,7 +23,7 @@ from fg import control_keyring
 from fg import pki as fg_pki
 from fgbg_common.snapshot import PilotSnapshot
 
-REQUEST_TIMEOUT_SECONDS = 5
+REQUEST_TIMEOUT_SECONDS = 60
 CONTROL_BASE_URL_FALLBACK = 'http://127.0.0.1:18080'
 HANDSHAKE_THROTTLE_SECONDS_FALLBACK = 120
 
@@ -33,7 +33,16 @@ _HANDSHAKE_THROTTLE_REASON = ''
 
 
 class BgSyncError(RuntimeError):
-    """Raised for control transport or rejected operations."""
+    """Raised for control transport or rejected operations.
+
+    ``code`` carries the upstream HTTP status when the failure originated from a
+    BG response (e.g. 404 when a pilot isn't in BG's cached snapshot yet), so
+    callers can react to specific conditions without parsing the message.
+    """
+
+    def __init__(self, *args, code=None):
+        super().__init__(*args)
+        self.code = code
 
 
 def _handshake_throttle_seconds() -> int:
@@ -122,6 +131,9 @@ def _control_base_url() -> str:
 
 
 def _control_timeout() -> int:
+    env_timeout = os.getenv('MURMUR_CONTROL_TIMEOUT_SECONDS', '').strip()
+    if env_timeout:
+        return int(env_timeout)
     return int(getattr(settings, 'MURMUR_CONTROL_TIMEOUT_SECONDS', REQUEST_TIMEOUT_SECONDS))
 
 
@@ -251,7 +263,7 @@ def _request_json(
 
         if _is_handshake_auth_failure(status_code=exc.code, reason=error_reason):
             _set_handshake_throttle(f'HTTP {exc.code}: {error_reason}', context=auth_snapshot)
-        raise BgSyncError(f'Control request failed ({exc.code}): {error_reason}') from exc
+        raise BgSyncError(f'Control request failed ({exc.code}): {error_reason}', code=exc.code) from exc
     except URLError as exc:
         _set_handshake_throttle(f'endpoint unreachable: {exc.reason}', context=auth_snapshot)
         raise BgSyncError(f'Control endpoint unreachable: {exc.reason}') from exc
@@ -612,6 +624,27 @@ class BgControlClient:
             else:
                 payload['password'] = password
         return _post_json('/v1/password-reset', payload, requested_by=requested_by)
+
+    def clear_certhash_for_user(
+        self,
+        user,
+        server_id: int,
+        *,
+        pkid: int | None = None,
+        requested_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Clear the stored Murmur certhash for ``(user_id, server_id)`` on BG.
+
+        Murmur reads ``certhash`` lazily on next reconnect, so no ICE call is
+        needed — the next time the user connects with their cert, Murmur will
+        rebind it. Raises :class:`BgSyncError` on transport / non-2xx error.
+        """
+        resolved_pkid = int(pkid) if pkid is not None else int(user.pk)
+        payload = {
+            'pkid': resolved_pkid,
+            'server_id': int(server_id),
+        }
+        return _post_json('/v1/clear-certhash', payload, requested_by=requested_by)
 
     def sync_registration_contract(
         self,
