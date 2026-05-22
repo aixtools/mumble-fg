@@ -256,6 +256,32 @@ def _compute_groups(user, mumble_user=None):
     return effective_groups_csv_for_user(user, mumble_user=mumble_user)
 
 
+def _push_pilot_snapshot_to_bg(user) -> bool:
+    """Best-effort push of a fresh ACL + pilot snapshot to BG.
+
+    BG can only auto-provision a Murmur registration for a pilot it already has
+    in its cached snapshot. A member who registered in Cube since the last
+    periodic ACL/snapshot sync isn't in that snapshot yet, so activation 404s.
+    Pushing here lets activation succeed on the first click instead of waiting
+    for the periodic cadence. Never raises — on failure we fall back to the
+    periodic sync and the user can retry later.
+    """
+    try:
+        sync_acl_rules_to_bg(
+            requested_by=str(getattr(user, 'username', 'unknown')),
+            actor_username=str(getattr(user, 'username', 'system')),
+            source='activate_self_heal',
+            trigger='activate',
+        )
+        return True
+    except Exception:  # noqa: BLE001 — best-effort; activation must not hard-fail here
+        logger.exception(
+            'Self-heal pilot-snapshot push to BG failed for user=%s',
+            getattr(user, 'pk', None),
+        )
+        return False
+
+
 @require_POST
 @login_required
 def activate(request, server_id):
@@ -280,17 +306,28 @@ def activate(request, server_id):
     try:
         murmur_userid = _sync_remote_registration(mumble_user)
     except BgSyncError as exc:
-        logger.warning(
-            'Failed to provision Murmur registration for MumbleUser pk=%s on server=%s: %s',
-            getattr(mumble_user, 'pk', 'bg-runtime'),
-            server.pk,
-            exc,
-        )
-        messages.warning(
-            request,
-            _('Murmur registration sync failed. Requesting a new password later will retry it.'),
-        )
-        return redirect('profile')
+        # A 404 means BG has no snapshot entry for this pilot yet. Push a fresh
+        # snapshot and retry once so a just-registered member can activate
+        # immediately rather than waiting for the next periodic sync.
+        if getattr(exc, 'code', None) == 404 and _push_pilot_snapshot_to_bg(request.user):
+            try:
+                murmur_userid = _sync_remote_registration(mumble_user)
+            except BgSyncError as retry_exc:
+                exc = retry_exc
+            else:
+                exc = None
+        if exc is not None:
+            logger.warning(
+                'Failed to provision Murmur registration for MumbleUser pk=%s on server=%s: %s',
+                getattr(mumble_user, 'pk', 'bg-runtime'),
+                server.pk,
+                exc,
+            )
+            messages.warning(
+                request,
+                _('Murmur registration sync failed. Requesting a new password later will retry it.'),
+            )
+            return redirect('profile')
 
     if _host_murmur_models_available() and mumble_user.mumble_userid != murmur_userid:
         mumble_user.mumble_userid = murmur_userid
