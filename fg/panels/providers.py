@@ -88,10 +88,17 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
 
     def _accounts_by_server(self, user_id: int) -> dict[int, Any]:
         try:
-            local = {
-                mumble_user.server_id: mumble_user
-                for mumble_user in MumbleUser.objects.filter(user_id=user_id).select_related('server')
-            }
+            # is_temporary=False ensures a guest temp row linked to this
+            # user_id (e.g., from past data corruption) never surfaces as
+            # the pilot's profile. order_by makes row selection deterministic
+            # when more than one row matches (last-write wins).
+            local: dict[int, Any] = {}
+            for mumble_user in (
+                MumbleUser.objects.filter(user_id=user_id, is_temporary=False)
+                .select_related('server')
+                .order_by('server_id', '-pk')
+            ):
+                local.setdefault(mumble_user.server_id, mumble_user)
             if local:
                 return local
         except MurmurModelLookupError:
