@@ -66,7 +66,24 @@ def build_group_mapping_config() -> tuple[set[str], set[str], dict[str, list[Cub
     )
 
 
+def is_persisted_user(user) -> bool:
+    """True only for a saved Cube ``User`` row.
+
+    ``BgRuntimeService.attach_users`` substitutes a ``SimpleNamespace`` placeholder
+    (username only, no ``pk``) for Murmur registrations that have no backing Cube
+    account — system accounts like ``SuperUser``, the ``xlate-*`` translators and
+    ``temp_temp_*`` links. Those have no Cube identity and own no Cube groups, and
+    feeding one into a ``filter(user=...)`` raises ``TypeError`` as Django tries to
+    coerce it to an int pk. Every ORM sink that takes ``user`` must screen here first.
+    """
+    return getattr(user, 'pk', None) is not None
+
+
 def effective_murmur_groups_for_user(user, *, mumble_user=None, _config=None) -> list[str]:
+    # A non-persisted user (Murmur system/unlinked account) owns no Cube-derived
+    # groups; bail before any adapter call hits the ORM with a fake user.
+    if not is_persisted_user(user):
+        return []
     adapter = get_host_adapter()
     parts: list[str] = []
     main = adapter.get_main_character(user)
