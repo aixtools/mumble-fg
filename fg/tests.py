@@ -1258,6 +1258,62 @@ class RuntimePayloadCompatibilityTest(TestCase):
 
         self.assertIsNone(registration)
 
+    def test_runtime_parser_reads_groups(self):
+        # groups must round-trip from the BG payload; the group-sync sweep
+        # compares against it. If it stayed the '' default, every registration
+        # would look changed and re-push to the BG every run.
+        registration = self.service._registration_from_payload(
+            {
+                'pkid': 903,
+                'server_id': 77,
+                'server_name': 'Runtime Server',
+                'username': 'Pilot_Groups',
+                'groups': 'Alliance,Corp,Member',
+            },
+            servers_by_id={77: self.server},
+        )
+
+        self.assertIsNotNone(registration)
+        self.assertEqual(registration.groups, 'Alliance,Corp,Member')
+
+    def test_runtime_parser_groups_default_empty(self):
+        registration = self.service._registration_from_payload(
+            {'pkid': 904, 'server_id': 77, 'server_name': 'S', 'username': 'x'},
+            servers_by_id={77: self.server},
+        )
+
+        self.assertEqual(registration.groups, '')
+
+
+class GroupSyncConvergenceTest(TestCase):
+    """The group-sync sweep must only push to the BG on a real group change.
+    Before groups round-tripped in the registration payload, the stored side was
+    always '' so every registration re-pushed every run (control_main ~69% CPU).
+    """
+
+    def test_groups_equivalent_ignores_order(self):
+        from fg.tasks import _groups_equivalent
+        self.assertTrue(_groups_equivalent('A,B,C', 'C,B,A'))
+        self.assertTrue(_groups_equivalent('', ''))
+        self.assertFalse(_groups_equivalent('', 'A'))
+        self.assertFalse(_groups_equivalent('A,B', 'A,B,C'))
+
+    @patch('fg.tasks._push_groups_to_bg')
+    @patch('fg.tasks.effective_groups_csv_for_user', return_value='A,B,C')
+    def test_no_push_when_only_order_differs(self, _csv, mock_push):
+        from fg.tasks import _update_registration_groups
+        reg = SimpleNamespace(user=SimpleNamespace(pk=1), user_id=1, username='u', groups='C,B,A')
+        _update_registration_groups(reg, config=None)
+        mock_push.assert_not_called()
+
+    @patch('fg.tasks._push_groups_to_bg')
+    @patch('fg.tasks.effective_groups_csv_for_user', return_value='A,B,C')
+    def test_push_when_groups_change(self, _csv, mock_push):
+        from fg.tasks import _update_registration_groups
+        reg = SimpleNamespace(user=SimpleNamespace(pk=1), user_id=1, username='u', groups='')
+        _update_registration_groups(reg, config=None)
+        mock_push.assert_called_once()
+
 
 @override_settings(**_NO_REDIS, MURMUR_MODEL_APP_LABEL='missing_app_label')
 class RuntimeFallbackManageViewTest(TestCase):

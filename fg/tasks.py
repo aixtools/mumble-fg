@@ -25,6 +25,14 @@ def _push_groups_to_bg(obj):
         )
 
 
+def _groups_equivalent(a: str, b: str) -> bool:
+    """Compare two group CSVs as sets, so a mere ordering difference isn't
+    treated as a change. The computed CSV isn't canonically ordered, so a
+    string comparison can churn — re-pushing to the BG every sweep even when the
+    effective group set is identical."""
+    return {g for g in (a or '').split(',') if g} == {g for g in (b or '').split(',') if g}
+
+
 def update_mumble_groups(mumble_user_id):
     try:
         mumble_user = MumbleUser.objects.select_related('user').get(
@@ -34,7 +42,7 @@ def update_mumble_groups(mumble_user_id):
         return
     changed_fields = []
     groups = effective_groups_csv_for_user(mumble_user.user, mumble_user=mumble_user)
-    if mumble_user.groups != groups:
+    if not _groups_equivalent(mumble_user.groups, groups):
         mumble_user.groups = groups
         changed_fields.append('groups')
     display_name = _compute_display_name(mumble_user.user)
@@ -65,7 +73,7 @@ def _update_registration_groups(registration, *, config):
         )
         return
     new_groups = effective_groups_csv_for_user(user, mumble_user=registration, _config=config)
-    if registration.groups != new_groups:
+    if not _groups_equivalent(registration.groups, new_groups):
         registration.groups = new_groups
         logger.info(
             'Updated groups for registration %s (user_id=%s): %s',
