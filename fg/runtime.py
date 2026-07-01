@@ -171,6 +171,7 @@ class BgRuntimeService:
             contract_alliance_id=_coerce_int(payload.get('alliance_id')),
             contract_kdf_iterations=_coerce_int(payload.get('kdf_iterations')),
             hashfn=str(payload.get('hashfn', '') or ''),
+            groups=str(payload.get('groups', '') or ''),
             active_session_ids=session_ids,
             has_priority_speaker=_coerce_bool(payload.get('has_priority_speaker')),
             last_authenticated=_coerce_datetime(payload.get('last_authenticated')),
