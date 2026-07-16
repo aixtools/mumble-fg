@@ -36,9 +36,9 @@ class MurmurPanelDescriptor:
     password_reset_url: str
     password_set_url: str
     # ShitSpeak cluster panels carry the regional connect endpoints
-    # ({label, host, port} dicts) for a single shared registration; empty for
+    # (fg.runtime.Endpoint items) for a single shared registration; empty for
     # Murmur (per-server) panels.
-    endpoints: tuple[dict, ...] = ()
+    endpoints: tuple = ()
 
     def to_panel_context(self) -> dict[str, Any]:
         return {
@@ -61,11 +61,7 @@ class MurmurPanelDescriptor:
             'password_reset_url': self.password_reset_url,
             'password_set_url': self.password_set_url,
             'endpoints': [
-                {
-                    'host': e.get('host', ''),
-                    'port': e.get('port', ''),
-                    'label': e.get('label') or e.get('host', ''),
-                }
+                {'host': e.host, 'port': e.port, 'label': e.label or e.host}
                 for e in self.endpoints
             ],
         }

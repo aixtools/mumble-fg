@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class Endpoint:
+    """One regional connect endpoint for a shitspeak cluster. Frozen + hashable
+    so it can live on the (frozen, hashable) RuntimeServer."""
+    label: str
+    host: str
+    port: str
+    address: str
+
+
+@dataclass(frozen=True)
 class RuntimeServer:
     id: int
     name: str
@@ -23,7 +33,7 @@ class RuntimeServer:
     server_key: str
     is_active: bool = True
     driver: str = 'ice'
-    endpoints: tuple[dict, ...] = field(default_factory=tuple)
+    endpoints: tuple[Endpoint, ...] = field(default_factory=tuple)
 
     @property
     def pk(self) -> int:
@@ -85,8 +95,8 @@ def _coerce_bool(value: Any, *, default: bool = False) -> bool:
     return default
 
 
-def _normalize_endpoint(item) -> dict | None:
-    """Normalize a /v1/servers endpoint into ``{label, host, port, address}``.
+def _normalize_endpoint(item) -> "Endpoint | None":
+    """Normalize a /v1/servers endpoint into an ``Endpoint``.
 
     Accepts a dict (BG that carries region labels) or a plain ``host:port``
     string (older BG). Returns None for empty items.
@@ -98,14 +108,14 @@ def _normalize_endpoint(item) -> dict | None:
         if not address:
             return None
         label = str(item.get('label', '') or '').strip() or host or address
-        return {'label': label, 'host': host or address, 'port': port, 'address': address}
+        return Endpoint(label=label, host=host or address, port=port, address=address)
     s = str(item or '').strip()
     if not s:
         return None
     host, sep, port = s.rpartition(':')
     if sep and port.isdigit():
-        return {'label': host, 'host': host, 'port': port, 'address': s}
-    return {'label': s, 'host': s, 'port': '', 'address': s}
+        return Endpoint(label=host, host=host, port=port, address=s)
+    return Endpoint(label=s, host=s, port='', address=s)
 
 
 def _coerce_datetime(value: Any):
