@@ -4,7 +4,7 @@ from celery import shared_task
 
 from .acl_sync import sync_acl_rules_to_bg
 from .control import BgControlClient, BgSyncError
-from .group_mapping import build_group_mapping_config, effective_groups_csv_for_user
+from .group_mapping import build_group_mapping_config, effective_groups_csv_for_user, is_persisted_user
 from .models import MumbleUser
 from .runtime import get_runtime_service
 from .views import _compute_display_name
@@ -65,8 +65,11 @@ def _update_registration_groups(registration, *, config):
     # user_id doesn't match a real Django user. That placeholder is fine for
     # display paths, but group computation queries against it fail downstream.
     # Skip orphans here so a handful of stale rows don't poison the sync.
-    if user is None or getattr(user, 'pk', None) is None:
-        logger.warning(
+    # These are expected, steady-state system/unlinked accounts (SuperUser,
+    # xlate-*, temp_temp_*) hit on every 3-minute sweep, so log at debug — a
+    # warning per orphan per sweep is just noise.
+    if not is_persisted_user(user):
+        logger.debug(
             'Skipping group sync for orphan registration %s (user_id=%s): '
             'no matching Django user',
             registration.username, registration.user_id,

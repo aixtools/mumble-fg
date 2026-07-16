@@ -99,6 +99,50 @@ class ProfilePanelEligibilityTest(TestCase):
         )
         self.assertFalse(panels[0]['show_pilot_selector'])
 
+    @patch('fg.panels.providers.safe_list_servers')
+    def test_shitspeak_server_gets_its_own_panel(self, mock_list):
+        """ShitSpeak (different stack) renders as its own card with a distinct
+        template + key and a region selector over the cluster endpoints, while
+        Murmur servers keep the existing panel."""
+        from fg.runtime import RuntimeServer
+
+        mock_list.return_value = [
+            RuntimeServer(
+                id=1, name='voice.example.com:64738', address='voice.example.com:64738',
+                server_key='k-ice', is_active=True, driver='ice',
+            ),
+            RuntimeServer(
+                id=5, name='mumble-beta', address='eu-voice.undock.wtf:64738',
+                server_key='k-ss', is_active=True, driver='shitspeak',
+                endpoints=(
+                    'us-voice.undock.wtf:64738',
+                    'eu-voice.undock.wtf:64738',
+                    'evil-voice-hk.undock.wtf:64739',
+                ),
+            ),
+        ]
+        by_key = {p['key']: p for p in build_profile_panels(self._request())}
+
+        # Murmur server: unchanged panel + template.
+        self.assertIn('murmur-server-1', by_key)
+        self.assertEqual(by_key['murmur-server-1']['template'], 'fg/panels/profile_panel.html')
+
+        # ShitSpeak server: its own card, its own template, endpoints exposed.
+        self.assertIn('mumble-beta-server-5', by_key)
+        ss = by_key['mumble-beta-server-5']
+        self.assertEqual(ss['template'], 'fg/panels/shitspeak_panel.html')
+        self.assertEqual(ss['server_label'], 'mumble-beta')
+        self.assertEqual(
+            [(e['host'], e['port']) for e in ss['endpoints']],
+            [
+                ('us-voice.undock.wtf', '64738'),
+                ('eu-voice.undock.wtf', '64738'),
+                ('evil-voice-hk.undock.wtf', '64739'),
+            ],
+        )
+        # Still opts into the /comms dashboard via the 'mumble-' key prefix.
+        self.assertTrue(ss['key'].startswith('mumble-'))
+
     @patch('fg.panels.providers.safe_list_servers', return_value=[])
     def test_profile_panel_hides_for_non_eligible_user(self, _mock_safe_list_servers):
         other_user = _make_member('ineligibleprofileuser')
