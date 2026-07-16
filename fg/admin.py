@@ -21,7 +21,7 @@ from .models import (
     access_rule_snapshot,
     append_access_rule_audit,
 )
-from .models import MurmurModelLookupError, TempLinkSettings, resolve_murmur_models
+from .models import AccessGrantSettings, MurmurModelLookupError, TempLinkSettings, resolve_murmur_models
 
 
 def _get_eve_character_model():
@@ -255,10 +255,22 @@ class TempLinkSettingsAdmin(admin.ModelAdmin):
         return redirect(f'../templinksettings/{settings.pk}/change/')
 
 
+@admin.register(AccessGrantSettings)
+class AccessGrantSettingsAdmin(admin.ModelAdmin):
+    filter_horizontal = ['grant_groups']
+
+    def has_add_permission(self, request):
+        return not AccessGrantSettings.objects.exists()
+
+    def changelist_view(self, request, extra_context=None):
+        settings = AccessGrantSettings.load()
+        return redirect(f'../accessgrantsettings/{settings.pk}/change/')
+
+
 @admin.register(AccessRule)
 class AccessRuleAdmin(admin.ModelAdmin):
-    list_display = ('entity_id', 'entity_type_badge', 'deny_badge', 'resolved_name', 'note', 'created_by', 'updated_at')
-    list_filter = ('entity_type', 'deny')
+    list_display = ('entity_id', 'entity_type_badge', 'deny_badge', 'resolved_name', 'source', 'note', 'created_by', 'updated_at')
+    list_filter = ('entity_type', 'deny', 'source')
     search_fields = ('entity_id', 'note', 'created_by')
     list_editable = ()
     readonly_fields = ('created_at', 'updated_at')
