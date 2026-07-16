@@ -112,12 +112,12 @@ class ProfilePanelEligibilityTest(TestCase):
                 server_key='k-ice', is_active=True, driver='ice',
             ),
             RuntimeServer(
-                id=5, name='mumble-beta', address='eu-voice.undock.wtf:64738',
+                id=5, name='mumble-beta', address='eu-voice.insidiousevil.org:64738',
                 server_key='k-ss', is_active=True, driver='shitspeak',
                 endpoints=(
-                    'us-voice.undock.wtf:64738',
-                    'eu-voice.undock.wtf:64738',
-                    'evil-voice-hk.undock.wtf:64739',
+                    {'label': 'US Voice', 'host': 'us-voice.insidiousevil.org', 'port': '64738', 'address': 'us-voice.insidiousevil.org:64738'},
+                    {'label': 'EU Voice', 'host': 'eu-voice.insidiousevil.org', 'port': '64738', 'address': 'eu-voice.insidiousevil.org:64738'},
+                    {'label': 'HK Voice', 'host': 'evil-voice-hk.undock.wtf', 'port': '64739', 'address': 'evil-voice-hk.undock.wtf:64739'},
                 ),
             ),
         ]
@@ -127,17 +127,17 @@ class ProfilePanelEligibilityTest(TestCase):
         self.assertIn('murmur-server-1', by_key)
         self.assertEqual(by_key['murmur-server-1']['template'], 'fg/panels/profile_panel.html')
 
-        # ShitSpeak server: its own card, its own template, endpoints exposed.
+        # ShitSpeak server: its own card, its own template, endpoints exposed with labels.
         self.assertIn('mumble-beta-server-5', by_key)
         ss = by_key['mumble-beta-server-5']
         self.assertEqual(ss['template'], 'fg/panels/shitspeak_panel.html')
         self.assertEqual(ss['server_label'], 'mumble-beta')
         self.assertEqual(
-            [(e['host'], e['port']) for e in ss['endpoints']],
+            [(e['label'], e['host'], e['port']) for e in ss['endpoints']],
             [
-                ('us-voice.undock.wtf', '64738'),
-                ('eu-voice.undock.wtf', '64738'),
-                ('evil-voice-hk.undock.wtf', '64739'),
+                ('US Voice', 'us-voice.insidiousevil.org', '64738'),
+                ('EU Voice', 'eu-voice.insidiousevil.org', '64738'),
+                ('HK Voice', 'evil-voice-hk.undock.wtf', '64739'),
             ],
         )
         # Still opts into the /comms dashboard via the 'mumble-' key prefix.

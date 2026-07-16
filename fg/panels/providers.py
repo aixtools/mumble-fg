@@ -35,9 +35,10 @@ class MurmurPanelDescriptor:
     show_pilot_selector: bool
     password_reset_url: str
     password_set_url: str
-    # ShitSpeak cluster panels carry the regional connect endpoints ('host:port')
-    # for a single shared registration; empty for Murmur (per-server) panels.
-    endpoints: tuple[str, ...] = ()
+    # ShitSpeak cluster panels carry the regional connect endpoints
+    # ({label, host, port} dicts) for a single shared registration; empty for
+    # Murmur (per-server) panels.
+    endpoints: tuple[dict, ...] = ()
 
     def to_panel_context(self) -> dict[str, Any]:
         return {
@@ -60,18 +61,14 @@ class MurmurPanelDescriptor:
             'password_reset_url': self.password_reset_url,
             'password_set_url': self.password_set_url,
             'endpoints': [
-                {'host': host, 'port': port, 'label': raw}
-                for raw, host, port in (self._split_endpoint(e) for e in self.endpoints)
+                {
+                    'host': e.get('host', ''),
+                    'port': e.get('port', ''),
+                    'label': e.get('label') or e.get('host', ''),
+                }
+                for e in self.endpoints
             ],
         }
-
-    @staticmethod
-    def _split_endpoint(raw: str) -> tuple[str, str, str]:
-        raw = str(raw or '').strip()
-        host, sep, port = raw.rpartition(':')
-        if sep and port.isdigit():
-            return raw, host, port
-        return raw, raw, ''
 
 
 class ProfilePanelProvider(ABC):
@@ -271,7 +268,9 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                 # registration, and a region selector over the cluster endpoints.
                 endpoints = tuple(getattr(server, 'endpoints', ()) or ())
                 if not endpoints and getattr(server, 'address', ''):
-                    endpoints = (server.address,)
+                    from fg.runtime import _normalize_endpoint
+                    fallback = _normalize_endpoint(server.address)
+                    endpoints = (fallback,) if fallback else ()
                 descriptors.append(
                     self._panel_descriptor(
                         request=request,
