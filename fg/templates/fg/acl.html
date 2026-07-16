@@ -146,6 +146,9 @@
                             {% else %}
                                 <span style="background: #9c27b0; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;">{{ rule.get_entity_type_display }}</span>
                             {% endif %}
+                            {% if rule.source == 'group_grant' %}
+                                <span style="background: rgba(0,188,212,0.15); color: #00bcd4; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid rgba(0,188,212,0.4);" title="{% trans 'Managed by the Cube group grant reconciler. Deleting it only lasts until the next sync while the pilot remains in a grant group; toggling it adopts the rule as manual.' %}">{% trans "GROUP GRANT" %}</span>
+                            {% endif %}
                         </td>
                         <td style="padding: 8px; text-align: center;">
                             {% if can_change_acl %}

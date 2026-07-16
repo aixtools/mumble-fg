@@ -45,6 +45,8 @@ from .group_mapping import (
 )
 from .host import get_host_adapter
 from .models import (
+    ACCESS_RULE_SOURCE_GROUP_GRANT,
+    ACCESS_RULE_SOURCE_MANUAL,
     ACL_AUDIT_ACTION_CREATE,
     ACL_AUDIT_ACTION_DELETE,
     ACL_AUDIT_ACTION_UPDATE,
@@ -1526,6 +1528,17 @@ def acl_sync(request):
             return JsonResponse({'error': 'Forbidden'}, status=403)
         return HttpResponseForbidden()
 
+    # The Sync button doubles as the "apply group grants now" affordance.
+    # Fault-isolated: grant trouble must not block pushing the current rules.
+    try:
+        from .acl_grants import reconcile_group_grants
+        reconcile_group_grants(
+            actor_username=request.user.get_username(),
+            source='acl_ui_sync',
+        )
+    except Exception:
+        logger.exception('Group-grant reconcile failed during manual ACL sync')
+
     try:
         response = _sync_acl_rules_after_change(
             request,
@@ -1574,11 +1587,16 @@ def acl_toggle_deny(request, rule_id):
     rule = get_object_or_404(AccessRule, pk=rule_id)
     previous = access_rule_snapshot(rule)
     rule.deny = not rule.deny
+    update_fields = ['deny', 'updated_at']
     if rule.deny:
         rule.acl_admin = False
-        rule.save(update_fields=['deny', 'acl_admin', 'updated_at'])
-    else:
-        rule.save(update_fields=['deny', 'updated_at'])
+        update_fields.append('acl_admin')
+    if rule.source == ACCESS_RULE_SOURCE_GROUP_GRANT:
+        # A human touched it: adopt as manual so the group-grant reconciler
+        # never garbage-collects an admin's explicit decision.
+        rule.source = ACCESS_RULE_SOURCE_MANUAL
+        update_fields.append('source')
+    rule.save(update_fields=update_fields)
     append_access_rule_audit(
         action=ACL_AUDIT_ACTION_UPDATE,
         actor_username=request.user.get_username(),
@@ -1625,7 +1643,12 @@ def acl_toggle_admin(request, rule_id):
             return redirect('mumble:acl_list')
 
     rule.acl_admin = target_admin
-    rule.save(update_fields=['acl_admin', 'updated_at'])
+    update_fields = ['acl_admin', 'updated_at']
+    if rule.source == ACCESS_RULE_SOURCE_GROUP_GRANT:
+        # Adopt on manual edit — see acl_toggle_deny.
+        rule.source = ACCESS_RULE_SOURCE_MANUAL
+        update_fields.append('source')
+    rule.save(update_fields=update_fields)
     append_access_rule_audit(
         action=ACL_AUDIT_ACTION_UPDATE,
         actor_username=request.user.get_username(),

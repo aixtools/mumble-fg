@@ -107,6 +107,14 @@ ACL_AUDIT_ACTION_CHOICES = [
     (ACL_AUDIT_ACTION_SYNC, 'Sync'),
 ]
 
+ACCESS_RULE_SOURCE_MANUAL = 'manual'
+ACCESS_RULE_SOURCE_GROUP_GRANT = 'group_grant'
+
+ACCESS_RULE_SOURCE_CHOICES = [
+    (ACCESS_RULE_SOURCE_MANUAL, 'Manual'),
+    (ACCESS_RULE_SOURCE_GROUP_GRANT, 'Group grant'),
+]
+
 
 class AccessRule(models.Model):
     """
@@ -147,6 +155,14 @@ class AccessRule(models.Model):
         blank=True,
         default='',
         help_text='Admin notes (e.g. reason for denial, ticket reference).',
+    )
+    source = models.CharField(
+        max_length=16,
+        choices=ACCESS_RULE_SOURCE_CHOICES,
+        default=ACCESS_RULE_SOURCE_MANUAL,
+        help_text='group_grant rules are owned by the Cube-group reconciler and '
+                  'auto-removed when the pilot leaves the granting group. Any '
+                  'manual edit re-marks the rule as manual.',
     )
     created_by = models.CharField(
         max_length=255,
@@ -196,6 +212,7 @@ def access_rule_snapshot(rule: AccessRule | None) -> dict[str, Any]:
         'deny': rule.deny,
         'acl_admin': rule.acl_admin,
         'note': rule.note,
+        'source': rule.source,
         'created_by': rule.created_by,
     }
 
@@ -434,6 +451,41 @@ class TempLinkSettings(models.Model):
         return obj
 
 
+class AccessGrantSettings(models.Model):
+    """Singleton: Cube groups whose approved members get automatic pilot allow rules.
+
+    The reconciler (fg.acl_grants) keeps a pilot-level allow AccessRule for the
+    main character of every approved member of these groups, giving them full
+    voice registrations without a temp link. Rules it creates are marked
+    source='group_grant' and are removed when the member leaves the group.
+    """
+
+    grant_groups = models.ManyToManyField(
+        'accounts.Group',
+        blank=True,
+        related_name='access_grant_settings',
+        help_text='Approved members of these Cube groups get an automatic '
+                  'Mumble pilot allow rule for their main character.',
+    )
+
+    class Meta:
+        db_table = 'fg_access_grant_settings'
+        verbose_name = 'Access Grant Settings'
+        verbose_name_plural = 'Access Grant Settings'
+
+    def __str__(self) -> str:
+        return 'Access Grant Settings'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 def append_access_rule_audit(
     *,
     action: str,
@@ -501,8 +553,11 @@ class ControlChannelKeyEntry(models.Model):
 
 
 __all__ = [
+    'AccessGrantSettings',
     'AccessRule',
     'AccessRuleAudit',
+    'ACCESS_RULE_SOURCE_GROUP_GRANT',
+    'ACCESS_RULE_SOURCE_MANUAL',
     'ACL_AUDIT_ACTION_CREATE',
     'ACL_AUDIT_ACTION_DELETE',
     'ACL_AUDIT_ACTION_SYNC',

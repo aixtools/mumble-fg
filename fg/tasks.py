@@ -2,6 +2,7 @@ import logging
 
 from celery import shared_task
 
+from .acl_grants import reconcile_group_grants
 from .acl_sync import sync_acl_rules_to_bg
 from .control import BgControlClient, BgSyncError
 from .group_mapping import build_group_mapping_config, effective_groups_csv_for_user, is_persisted_user
@@ -112,6 +113,12 @@ def update_all_mumble_groups():
 
 @shared_task(ignore_result=True)
 def periodic_acl_sync():
+    # Converge group-driven pilot grants first so the push below carries them.
+    # Fault-isolated: a grant failure must never block the BG rule push.
+    try:
+        reconcile_group_grants()
+    except Exception:
+        logger.exception('Group-grant reconcile failed; pushing existing rules')
     response = sync_acl_rules_to_bg(
         requested_by='fg.periodic',
         actor_username='system',
