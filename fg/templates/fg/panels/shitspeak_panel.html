@@ -1,0 +1,254 @@
+{% load i18n %}
+
+{# ShitSpeak is a different stack from Murmur: its own card, one shared #}
+{# registration, and a region selector over the cluster's connect endpoints. #}
+<div
+    class="settings-card full-width shitspeak-profile-panel"
+    data-panel-id="{{ panel.key }}"
+    data-server-label="{{ panel.server_label }}"
+>
+    <div class="card-header" style="background: linear-gradient(135deg, var(--darker-bg) 0%, var(--card-bg) 100%); border-bottom: 2px solid var(--primary-color);">
+        <h2 class="card-title" style="color: var(--primary-color); text-transform: uppercase; letter-spacing: 1px;" title="{{ panel.server_hint }}">SHITSPEAK</h2>
+    </div>
+    <div class="card-body">
+        {% if panel.account %}
+            {% if panel.temp_password %}
+                <div style="background: #b8860b33; border: 1px solid #b8860b; border-radius: 6px; padding: 0.75rem; margin-bottom: 1rem;">
+                    <span class="info-label" style="display: block; margin-bottom: 0.25rem;">{% trans "Your New Password (shown once)" %}</span>
+                    <code style="user-select: all; font-size: 1.1rem; color: #ffd700; background: var(--darker-bg); padding: 0.25rem 0.5rem; border-radius: 4px; display: block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: break-word;">{{ panel.temp_password }}</code>
+                </div>
+            {% endif %}
+
+            <div class="account-info-grid">
+                <div class="info-item">
+                    <span class="info-label">{% trans "Server" %}</span>
+                    <span class="info-value" style="user-select: all;">{{ panel.server_label|default:"-" }}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">{% trans "Display Name" %}</span>
+                    <span class="info-value" style="user-select: all;">{{ panel.display_name|default:"-" }}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">{% trans "Username" %}</span>
+                    <span class="info-value" style="user-select: all;">{{ panel.username_with_slot|default:"-" }}</span>
+                </div>
+                {% if panel.is_mumble_admin %}
+                <div class="info-item">
+                    <span class="info-label">{% trans "IsAdmin" %}</span>
+                    <span class="info-value">Yes</span>
+                </div>
+                {% endif %}
+                {% if panel.endpoints %}
+                <div class="info-item">
+                    <span class="info-label">{% trans "Region" %}</span>
+                    <span class="info-value">
+                        <select
+                            class="shitspeak-region-selector"
+                            style="padding: 0.3rem 0.45rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); max-width: 100%;"
+                        >
+                            {% for ep in panel.endpoints %}
+                                <option value="{{ forloop.counter0 }}" data-host="{{ ep.host }}" data-port="{{ ep.port }}">{{ ep.host }}</option>
+                            {% endfor %}
+                        </select>
+                    </span>
+                </div>
+                {% endif %}
+                <div class="info-item">
+                    <span class="info-label">{% trans "Address" %}</span>
+                    <span class="info-value shitspeak-address" style="user-select: all;">{% if panel.endpoints %}{{ panel.endpoints.0.host }}{% elif panel.server_address %}{{ panel.server_address }}{% else %}{% trans "BG unavailable" %}{% endif %}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">{% trans "Port" %}</span>
+                    <span class="info-value shitspeak-port" style="user-select: all;">{% if panel.endpoints %}{{ panel.endpoints.0.port }}{% elif panel.server_port %}{{ panel.server_port }}{% else %}-{% endif %}</span>
+                </div>
+            </div>
+
+            {% if panel.show_pilot_selector %}
+                <div style="margin-top: 1rem;">
+                    <label for="{{ panel.key }}-pilot-selector" class="info-label" style="display: block; margin-bottom: 0.35rem;">{% trans "Mumble Authentication" %}</label>
+                    <select
+                        id="{{ panel.key }}-pilot-selector"
+                        class="mumble-pilot-selector"
+                        style="width: 100%; max-width: 22rem; padding: 0.45rem 0.6rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.9rem;"
+                    >
+                        {% for pilot in panel.eligible_pilots %}
+                            <option value="{{ pilot.character_id }}"{% if pilot.is_main %} selected{% endif %}>{{ pilot.character_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            {% endif %}
+
+            <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem;">
+                <form method="post" action="{{ panel.password_reset_url }}" class="mumble-password-form" style="margin: 0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="pilot_id" class="mumble-pilot-id" value="{{ panel.eligible_pilots.0.character_id }}">
+                    {% if panel.server %}
+                        <input type="hidden" name="server_id" value="{{ panel.server.pk }}">
+                    {% endif %}
+                    <button
+                        type="submit"
+                        class="btn btn-outline btn-xs mumble-password-button"
+                        data-default-label="{% trans 'Reset Password' %}"
+                        data-loading-label="{% trans 'Resetting' %}"
+                        data-success-label="{% trans 'Password reset requested' %}"
+                        data-unavailable-label="{% trans 'BG unavailable' %}"
+                    >{% trans "Reset Password" %}</button>
+                </form>
+                <span class="mumble-password-status" style="font-size: 13px; color: var(--text-secondary); max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: break-word;"></span>
+            </div>
+
+            <form method="post" action="{{ panel.password_set_url }}" class="mumble-password-form" style="margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                {% csrf_token %}
+                <input type="hidden" name="pilot_id" class="mumble-pilot-id" value="{{ panel.eligible_pilots.0.character_id }}">
+                {% if panel.server %}
+                    <input type="hidden" name="server_id" value="{{ panel.server.pk }}">
+                {% endif %}
+                <input
+                    type="password"
+                    name="murmur_password"
+                    class="mumble-password-input"
+                    placeholder="{% trans 'Custom password (min 8)' %}"
+                    minlength="8"
+                    style="flex: 1; min-width: 14rem; padding: 0.35rem 0.5rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 0.85rem;"
+                >
+                <button
+                    type="submit"
+                    class="btn btn-outline btn-xs mumble-password-button"
+                    data-default-label="{% trans 'Set Password' %}"
+                    data-loading-label="{% trans 'Saving' %}"
+                    data-success-label="{% trans 'Password update requested' %}"
+                    data-unavailable-label="{% trans 'BG unavailable' %}"
+                >{% trans "Set Password" %}</button>
+            </form>
+        {% else %}
+            <div style="text-align: center; padding: 1rem 0;">
+                {% if panel.display_name %}
+                    <p style="color: var(--text-secondary); margin-bottom: 0.75rem;">{% trans "You will appear as" %} <strong style="color: var(--text-color);">{{ panel.display_name }}</strong></p>
+                {% endif %}
+                {% if panel.server %}
+                    <form method="post" action="{% url 'mumble:activate' panel.server.pk %}" style="margin: 0;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-primary btn-sm">{% trans "Activate Mumble Account" %}</button>
+                    </form>
+                {% endif %}
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+(function() {
+    function initShitspeakPanels() {
+        if (window.__shitspeakProfilePanelInit) { return; }
+        window.__shitspeakProfilePanelInit = true;
+
+        function parseJsonResponse(response) {
+            return response.text().then(function(text) {
+                const contentType = response.headers.get('content-type') || '';
+                let data = null;
+                if (contentType.indexOf('application/json') !== -1) {
+                    try { data = JSON.parse(text); } catch (e) { data = null; }
+                }
+                return { ok: response.ok, status: response.status, data: data };
+            });
+        }
+
+        function setPanelUnavailable(panel, statusEl, label) {
+            panel.querySelectorAll('.mumble-password-button').forEach(function(b) { b.disabled = true; b.textContent = label; });
+            panel.querySelectorAll('.mumble-password-input, .mumble-pilot-selector').forEach(function(i) { i.disabled = true; });
+            statusEl.textContent = label;
+            statusEl.style.color = '#e67e22';
+        }
+
+        function showSuccess(statusEl, message, password) {
+            // Build with textContent only — never innerHTML — to avoid XSS.
+            statusEl.textContent = message || '';
+            if (password) {
+                statusEl.appendChild(document.createTextNode(' '));
+                const code = document.createElement('code');
+                code.style.cssText = 'user-select: all; font-size: 1.1rem; color: #ffd700; background: var(--darker-bg); padding: 0.25rem 0.5rem; border-radius: 4px; display: inline-block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: break-word; vertical-align: middle;';
+                code.textContent = password;
+                statusEl.appendChild(code);
+            }
+            statusEl.style.color = '#2ecc71';
+        }
+
+        document.querySelectorAll('.shitspeak-profile-panel').forEach(function(panel) {
+            // Region selector -> live Address / Port.
+            const region = panel.querySelector('.shitspeak-region-selector');
+            const addressEl = panel.querySelector('.shitspeak-address');
+            const portEl = panel.querySelector('.shitspeak-port');
+            if (region && addressEl && portEl) {
+                region.addEventListener('change', function() {
+                    const opt = region.options[region.selectedIndex];
+                    if (!opt) { return; }
+                    addressEl.textContent = opt.dataset.host || opt.textContent;
+                    portEl.textContent = opt.dataset.port || '';
+                });
+            }
+
+            // Pilot selector -> hidden pilot_id fields.
+            const selector = panel.querySelector('.mumble-pilot-selector');
+            const statusEl = panel.querySelector('.mumble-password-status');
+            function syncPilot() {
+                if (!selector) { return; }
+                panel.querySelectorAll('.mumble-pilot-id').forEach(function(h) { h.value = selector.value; });
+            }
+            if (selector) { selector.addEventListener('change', syncPilot); syncPilot(); }
+
+            // Password forms (same BG endpoints as the Murmur panel; server_id targets this row).
+            panel.querySelectorAll('.mumble-password-form').forEach(function(form) {
+                form.addEventListener('submit', function(event) {
+                    event.preventDefault();
+                    const button = form.querySelector('.mumble-password-button');
+                    const defaultLabel = button.dataset.defaultLabel;
+                    const loadingLabel = button.dataset.loadingLabel;
+                    const successLabel = button.dataset.successLabel;
+                    const unavailableLabel = button.dataset.unavailableLabel;
+                    const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
+
+                    button.disabled = true;
+                    button.textContent = loadingLabel;
+                    statusEl.textContent = loadingLabel + '...';
+                    statusEl.style.color = 'var(--text-secondary)';
+
+                    fetch(form.action, {
+                        method: 'POST',
+                        headers: { 'X-CSRFToken': csrfToken, 'X-Requested-With': 'XMLHttpRequest' },
+                        body: new FormData(form),
+                    })
+                    .then(parseJsonResponse)
+                    .then(function(result) {
+                        if (!result.data) {
+                            if (result.status >= 502) { const e = new Error(unavailableLabel); e.bgUnavailable = true; throw e; }
+                            throw new Error('Request failed');
+                        }
+                        if (!result.ok || result.data.error) {
+                            const e = new Error(result.data.error || 'Request failed');
+                            e.bgUnavailable = !!result.data.bg_unavailable;
+                            throw e;
+                        }
+                        button.textContent = successLabel;
+                        showSuccess(statusEl, result.data.message || successLabel, result.data.password);
+                    })
+                    .catch(function(error) {
+                        if (error.bgUnavailable) { setPanelUnavailable(panel, statusEl, unavailableLabel); return; }
+                        button.textContent = defaultLabel;
+                        statusEl.textContent = error.message;
+                        statusEl.style.color = '#e74c3c';
+                    })
+                    .finally(function() {
+                        if (button.textContent !== unavailableLabel) { button.disabled = false; }
+                    });
+                });
+            });
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initShitspeakPanels, { once: true });
+    } else {
+        initShitspeakPanels();
+    }
+})();
+</script>

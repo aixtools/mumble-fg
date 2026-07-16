@@ -22,10 +22,16 @@ class RuntimeServer:
     address: str
     server_key: str
     is_active: bool = True
+    driver: str = 'ice'
+    endpoints: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def pk(self) -> int:
         return self.id
+
+    @property
+    def is_shitspeak(self) -> bool:
+        return str(self.driver or '').strip().lower() == 'shitspeak'
 
 
 @dataclass
@@ -100,12 +106,20 @@ class BgRuntimeService:
         if not server_key:
             logger.warning('Skipping BG server payload without server_key: %s', payload)
             return None
+        raw_endpoints = payload.get('endpoints')
+        endpoints = tuple(
+            str(item).strip()
+            for item in (raw_endpoints if isinstance(raw_endpoints, list) else [])
+            if str(item).strip()
+        )
         return RuntimeServer(
             id=server_id,
             name=str(payload.get('name', '') or '').strip() or f'server-{server_id}',
             address=str(payload.get('address', '') or '').strip(),
             server_key=server_key,
             is_active=_coerce_bool(payload.get('is_active'), default=True),
+            driver=str(payload.get('driver', 'ice') or 'ice').strip().lower(),
+            endpoints=endpoints,
         )
 
     @staticmethod

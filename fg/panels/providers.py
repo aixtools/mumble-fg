@@ -35,6 +35,9 @@ class MurmurPanelDescriptor:
     show_pilot_selector: bool
     password_reset_url: str
     password_set_url: str
+    # ShitSpeak cluster panels carry the regional connect endpoints ('host:port')
+    # for a single shared registration; empty for Murmur (per-server) panels.
+    endpoints: tuple[str, ...] = ()
 
     def to_panel_context(self) -> dict[str, Any]:
         return {
@@ -56,7 +59,19 @@ class MurmurPanelDescriptor:
             'show_pilot_selector': self.show_pilot_selector,
             'password_reset_url': self.password_reset_url,
             'password_set_url': self.password_set_url,
+            'endpoints': [
+                {'host': host, 'port': port, 'label': raw}
+                for raw, host, port in (self._split_endpoint(e) for e in self.endpoints)
+            ],
         }
+
+    @staticmethod
+    def _split_endpoint(raw: str) -> tuple[str, str, str]:
+        raw = str(raw or '').strip()
+        host, sep, port = raw.rpartition(':')
+        if sep and port.isdigit():
+            return raw, host, port
+        return raw, raw, ''
 
 
 class ProfilePanelProvider(ABC):
@@ -76,6 +91,10 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
 
     provider_name = 'generic'
     default_server_port = '64738'
+    # ShitSpeak servers render as their own card. Key stays under a '/comms'
+    # opt-in prefix ('mumble-') so the dashboard still surfaces it.
+    shitspeak_panel_key_prefix = 'mumble-beta-server-'
+    shitspeak_panel_template = 'fg/panels/shitspeak_panel.html'
 
     @staticmethod
     def _eligible_pilots(user) -> list[dict[str, Any]]:
@@ -153,6 +172,9 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         server,
         account,
         eligible_pilots: list[dict[str, Any]],
+        key_prefix: str = 'murmur-server-',
+        template: str | None = None,
+        endpoints: tuple[str, ...] = (),
     ) -> MurmurPanelDescriptor:
         display_name, display_name_is_fallback = self._display_name(
             request.user,
@@ -171,9 +193,9 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         server_address, server_port = self._server_address_port(server)
 
         return MurmurPanelDescriptor(
-            key=f'murmur-server-{getattr(server, "pk", "profile")}',
+            key=f'{key_prefix}{getattr(server, "pk", "profile")}',
             priority=self.panel_priority,
-            template=self.panel_template,
+            template=template or self.panel_template,
             server=server,
             account=account,
             temp_password=request.session.pop('murmur_temp_password', None),
@@ -189,6 +211,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             show_pilot_selector=len(eligible_pilots) > 1,
             password_reset_url=reverse('mumble:profile_reset_password'),
             password_set_url=reverse('mumble:profile_set_password'),
+            endpoints=endpoints,
         )
 
     @staticmethod
@@ -243,14 +266,32 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         descriptors: list[MurmurPanelDescriptor] = []
         for server in servers:
             account = accounts_by_server.get(server.pk)
-            descriptors.append(
-                self._panel_descriptor(
-                    request=request,
-                    server=server,
-                    account=account,
-                    eligible_pilots=eligible_pilots,
+            if getattr(server, 'is_shitspeak', False):
+                # ShitSpeak is a different stack: its own card, one shared
+                # registration, and a region selector over the cluster endpoints.
+                endpoints = tuple(getattr(server, 'endpoints', ()) or ())
+                if not endpoints and getattr(server, 'address', ''):
+                    endpoints = (server.address,)
+                descriptors.append(
+                    self._panel_descriptor(
+                        request=request,
+                        server=server,
+                        account=account,
+                        eligible_pilots=eligible_pilots,
+                        key_prefix=self.shitspeak_panel_key_prefix,
+                        template=self.shitspeak_panel_template,
+                        endpoints=endpoints,
+                    )
                 )
-            )
+            else:
+                descriptors.append(
+                    self._panel_descriptor(
+                        request=request,
+                        server=server,
+                        account=account,
+                        eligible_pilots=eligible_pilots,
+                    )
+                )
 
         return [descriptor.to_panel_context() for descriptor in descriptors]
 
