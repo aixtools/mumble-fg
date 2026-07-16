@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class Endpoint:
+    """One regional connect endpoint for a shitspeak cluster. Frozen + hashable
+    so it can live on the (frozen, hashable) RuntimeServer."""
+    label: str
+    host: str
+    port: str
+    address: str
+
+
+@dataclass(frozen=True)
 class RuntimeServer:
     id: int
     name: str
@@ -23,7 +33,7 @@ class RuntimeServer:
     server_key: str
     is_active: bool = True
     driver: str = 'ice'
-    endpoints: tuple[str, ...] = field(default_factory=tuple)
+    endpoints: tuple[Endpoint, ...] = field(default_factory=tuple)
 
     @property
     def pk(self) -> int:
@@ -85,6 +95,29 @@ def _coerce_bool(value: Any, *, default: bool = False) -> bool:
     return default
 
 
+def _normalize_endpoint(item) -> "Endpoint | None":
+    """Normalize a /v1/servers endpoint into an ``Endpoint``.
+
+    Accepts a dict (BG that carries region labels) or a plain ``host:port``
+    string (older BG). Returns None for empty items.
+    """
+    if isinstance(item, dict):
+        host = str(item.get('host', '') or '').strip()
+        port = str(item.get('port', '') or '').strip()
+        address = str(item.get('address', '') or '').strip() or (f'{host}:{port}' if port else host)
+        if not address:
+            return None
+        label = str(item.get('label', '') or '').strip() or host or address
+        return Endpoint(label=label, host=host or address, port=port, address=address)
+    s = str(item or '').strip()
+    if not s:
+        return None
+    host, sep, port = s.rpartition(':')
+    if sep and port.isdigit():
+        return Endpoint(label=host, host=host, port=port, address=s)
+    return Endpoint(label=s, host=s, port='', address=s)
+
+
 def _coerce_datetime(value: Any):
     if not isinstance(value, str) or not value:
         return None
@@ -106,11 +139,16 @@ class BgRuntimeService:
         if not server_key:
             logger.warning('Skipping BG server payload without server_key: %s', payload)
             return None
-        raw_endpoints = payload.get('endpoints')
+        # Prefer 'endpoint_details' (dicts with region labels); fall back to the
+        # older 'endpoints' (host:port strings) so deploy order doesn't matter.
+        raw_endpoints = payload.get('endpoint_details')
+        if not isinstance(raw_endpoints, list):
+            raw_endpoints = payload.get('endpoints')
         endpoints = tuple(
-            str(item).strip()
-            for item in (raw_endpoints if isinstance(raw_endpoints, list) else [])
-            if str(item).strip()
+            ep for ep in (
+                _normalize_endpoint(item)
+                for item in (raw_endpoints if isinstance(raw_endpoints, list) else [])
+            ) if ep is not None
         )
         return RuntimeServer(
             id=server_id,

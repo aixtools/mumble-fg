@@ -22,7 +22,7 @@
             <div class="account-info-grid">
                 <div class="info-item">
                     <span class="info-label">{% trans "Server" %}</span>
-                    <span class="info-value" style="user-select: all;">{{ panel.server_label|default:"-" }}</span>
+                    <span class="info-value shitspeak-server-name" data-base="{{ panel.server_label }}" style="user-select: all;">{{ panel.server_label|default:"-" }}{% if panel.endpoints and panel.endpoints.0.label %} - {{ panel.endpoints.0.label }}{% endif %}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">{% trans "Display Name" %}</span>
@@ -47,7 +47,7 @@
                             style="padding: 0.3rem 0.45rem; background: var(--darker-bg); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); max-width: 100%;"
                         >
                             {% for ep in panel.endpoints %}
-                                <option value="{{ forloop.counter0 }}" data-host="{{ ep.host }}" data-port="{{ ep.port }}">{{ ep.host }}</option>
+                                <option value="{{ forloop.counter0 }}" data-host="{{ ep.host }}" data-port="{{ ep.port }}" data-label="{{ ep.label }}">{{ ep.label }}</option>
                             {% endfor %}
                         </select>
                     </span>
@@ -178,12 +178,18 @@
             const region = panel.querySelector('.shitspeak-region-selector');
             const addressEl = panel.querySelector('.shitspeak-address');
             const portEl = panel.querySelector('.shitspeak-port');
+            const serverNameEl = panel.querySelector('.shitspeak-server-name');
             if (region && addressEl && portEl) {
                 region.addEventListener('change', function() {
                     const opt = region.options[region.selectedIndex];
                     if (!opt) { return; }
                     addressEl.textContent = opt.dataset.host || opt.textContent;
                     portEl.textContent = opt.dataset.port || '';
+                    if (serverNameEl) {
+                        const base = serverNameEl.dataset.base || '';
+                        const label = opt.dataset.label || '';
+                        serverNameEl.textContent = label ? (base + ' - ' + label) : base;
+                    }
                 });
             }
 

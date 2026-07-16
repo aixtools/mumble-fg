@@ -104,7 +104,7 @@ class ProfilePanelEligibilityTest(TestCase):
         """ShitSpeak (different stack) renders as its own card with a distinct
         template + key and a region selector over the cluster endpoints, while
         Murmur servers keep the existing panel."""
-        from fg.runtime import RuntimeServer
+        from fg.runtime import RuntimeServer, _normalize_endpoint
 
         mock_list.return_value = [
             RuntimeServer(
@@ -112,13 +112,13 @@ class ProfilePanelEligibilityTest(TestCase):
                 server_key='k-ice', is_active=True, driver='ice',
             ),
             RuntimeServer(
-                id=5, name='mumble-beta', address='eu-voice.undock.wtf:64738',
+                id=5, name='mumble-beta', address='eu-voice.insidiousevil.org:64738',
                 server_key='k-ss', is_active=True, driver='shitspeak',
-                endpoints=(
-                    'us-voice.undock.wtf:64738',
-                    'eu-voice.undock.wtf:64738',
-                    'evil-voice-hk.undock.wtf:64739',
-                ),
+                endpoints=tuple(_normalize_endpoint(d) for d in (
+                    {'label': 'US Voice', 'host': 'us-voice.insidiousevil.org', 'port': '64738'},
+                    {'label': 'EU Voice', 'host': 'eu-voice.insidiousevil.org', 'port': '64738'},
+                    {'label': 'HK Voice', 'host': 'evil-voice-hk.undock.wtf', 'port': '64739'},
+                )),
             ),
         ]
         by_key = {p['key']: p for p in build_profile_panels(self._request())}
@@ -127,21 +127,43 @@ class ProfilePanelEligibilityTest(TestCase):
         self.assertIn('murmur-server-1', by_key)
         self.assertEqual(by_key['murmur-server-1']['template'], 'fg/panels/profile_panel.html')
 
-        # ShitSpeak server: its own card, its own template, endpoints exposed.
+        # ShitSpeak server: its own card, its own template, endpoints exposed with labels.
         self.assertIn('mumble-beta-server-5', by_key)
         ss = by_key['mumble-beta-server-5']
         self.assertEqual(ss['template'], 'fg/panels/shitspeak_panel.html')
         self.assertEqual(ss['server_label'], 'mumble-beta')
         self.assertEqual(
-            [(e['host'], e['port']) for e in ss['endpoints']],
+            [(e['label'], e['host'], e['port']) for e in ss['endpoints']],
             [
-                ('us-voice.undock.wtf', '64738'),
-                ('eu-voice.undock.wtf', '64738'),
-                ('evil-voice-hk.undock.wtf', '64739'),
+                ('US Voice', 'us-voice.insidiousevil.org', '64738'),
+                ('EU Voice', 'eu-voice.insidiousevil.org', '64738'),
+                ('HK Voice', 'evil-voice-hk.undock.wtf', '64739'),
             ],
         )
         # Still opts into the /comms dashboard via the 'mumble-' key prefix.
         self.assertTrue(ss['key'].startswith('mumble-'))
+
+    def test_normalize_endpoint_forms_and_runtime_server_hashable(self):
+        from fg.runtime import RuntimeServer, _normalize_endpoint
+
+        # dict with a region label
+        e = _normalize_endpoint({'label': 'US Voice', 'host': 'us.example', 'port': '64738'})
+        self.assertEqual(
+            (e.label, e.host, e.port, e.address),
+            ('US Voice', 'us.example', '64738', 'us.example:64738'),
+        )
+        # plain 'host:port' string (older BG) -> label defaults to host
+        e2 = _normalize_endpoint('eu.example:64739')
+        self.assertEqual((e2.label, e2.host, e2.port), ('eu.example', 'eu.example', '64739'))
+        # empty forms drop out
+        self.assertIsNone(_normalize_endpoint(''))
+        self.assertIsNone(_normalize_endpoint({}))
+        # RuntimeServer must stay hashable (it's a frozen dataclass) even with endpoints
+        rs = RuntimeServer(
+            id=5, name='mumble-beta', address='a:1', server_key='k',
+            driver='shitspeak', endpoints=(e, e2),
+        )
+        self.assertIsInstance(hash(rs), int)
 
     @patch('fg.panels.providers.safe_list_servers', return_value=[])
     def test_profile_panel_hides_for_non_eligible_user(self, _mock_safe_list_servers):
