@@ -9,6 +9,18 @@ class MumbleFgConfig(AppConfig):
 
     def ready(self):
         pki_logger = logging.getLogger('fg.pki')
+
+        # Event-driven grant reconciliation: converge pilot allow rules within
+        # seconds of a grant-group membership change instead of waiting for
+        # the 10-minute beat. No-op on hosts without the accounts app.
+        try:
+            from fg.grant_signals import connect_membership_signals
+            connect_membership_signals()
+        except Exception:
+            logging.getLogger('fg.grants').exception(
+                'Grant membership signal hookup failed; beat reconcile still runs'
+            )
+
         from fg import crypto
         if not crypto.is_available():
             try:

@@ -256,3 +256,47 @@ class PeriodicSyncFaultIsolationTest(TestCase):
             tasks.periodic_acl_sync()
 
         push.assert_called_once()
+
+
+@override_settings(**_NO_REDIS)
+class GrantSignalTest(TestCase):
+    databases = frozenset(connections.databases)
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.group = _make_grant_group()
+        self.other = Group.objects.create(name='Unrelated Group')
+        self.user = _make_user('signalpilot')
+        _make_main(self.user, 95000050, 'Signal Pilot')
+
+    def _capture(self):
+        return self.captureOnCommitCallbacks(execute=True)
+
+    def test_grant_group_membership_enqueues_sync(self):
+        with patch('fg.tasks.periodic_acl_sync.delay') as delay, self._capture():
+            GroupMembership.objects.create(user=self.user, group=self.group, status='approved')
+        delay.assert_called_once()
+
+    def test_non_grant_group_membership_does_not_enqueue(self):
+        with patch('fg.tasks.periodic_acl_sync.delay') as delay, self._capture():
+            GroupMembership.objects.create(user=self.user, group=self.other, status='approved')
+        delay.assert_not_called()
+
+    def test_debounce_coalesces_bursts(self):
+        second = _make_user('signalpilot2')
+        with patch('fg.tasks.periodic_acl_sync.delay') as delay, self._capture():
+            GroupMembership.objects.create(user=self.user, group=self.group, status='approved')
+            GroupMembership.objects.create(user=second, group=self.group, status='approved')
+        delay.assert_called_once()
+
+    def test_membership_delete_enqueues_sync(self):
+        with self._capture():
+            membership = GroupMembership.objects.create(
+                user=self.user, group=self.group, status='approved',
+            )
+        from django.core.cache import cache
+        cache.clear()  # reset debounce from the create
+        with patch('fg.tasks.periodic_acl_sync.delay') as delay, self._capture():
+            membership.delete()
+        delay.assert_called_once()
