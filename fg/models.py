@@ -451,6 +451,63 @@ class TempLinkSettings(models.Model):
         return obj
 
 
+class ServerPanelSettings(models.Model):
+    """Per-server overrides for the pilot-facing profile tile.
+
+    BG owns the server inventory; this table only decides how (and whether) a
+    server surfaces on ``/profile/`` and the host comms dashboard. Rows are
+    keyed by ``server_key`` — the stable BG identifier — so a BG row rebuilt
+    with a new pk keeps its tile settings.
+
+    A missing row means "visible, default heading", so servers BG grows later
+    keep working with no admin action.
+    """
+
+    server_key = models.CharField(
+        max_length=128,
+        unique=True,
+        help_text='BG server_key this tile belongs to.',
+    )
+    enabled = models.BooleanField(
+        default=True,
+        help_text='Untick to hide this server\'s tile from every pilot. Voice access '
+                  'is unaffected — only the profile/comms tile is hidden.',
+    )
+    label = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='Heading shown on the tile, e.g. "Mumble". Blank falls back to the '
+                  'BG server name, then to the driver default.',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fg_server_panel_settings'
+        ordering = ['server_key']
+        verbose_name = 'Server Panel Settings'
+        verbose_name_plural = 'Server Panel Settings'
+        default_permissions = ()
+        permissions = [
+            ('view_server_panels', 'Can view Mumble server tile settings'),
+            ('change_server_panels', 'Can change Mumble server tile settings'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.server_key}: {self.label or "(default)"}'
+
+    @classmethod
+    def by_server_key(cls, server_keys=None) -> dict[str, 'ServerPanelSettings']:
+        """Map server_key -> settings row for the given keys (all rows if None)."""
+        queryset = cls.objects.all()
+        if server_keys is not None:
+            keys = {str(key).strip() for key in server_keys if str(key).strip()}
+            if not keys:
+                return {}
+            queryset = queryset.filter(server_key__in=keys)
+        return {row.server_key: row for row in queryset}
+
+
 class AccessGrantSettings(models.Model):
     """Singleton: Cube groups whose approved members get automatic pilot allow rules.
 

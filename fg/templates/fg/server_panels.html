@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Mumble Controls" %}{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+    <h1 style="margin: 0;">{% trans "Mumble Controls" %}</h1>
+</div>
+
+{% include 'fg/_controls_tabs.html' %}
+
+<section style="padding: 1rem; border: 1px solid var(--border-color, #2f3640); border-radius: 8px;">
+    <h2 style="margin-top: 0;">{% trans "Profile Tiles" %}</h2>
+    <p style="color: var(--text-secondary); font-size: 13px; margin: 0 0 1rem;">
+        {% blocktrans %}Controls which servers get a tile on every pilot's profile page and the comms dashboard, and what the tile is called. Hiding a tile does not touch voice access or registrations — pilots already connected stay connected.{% endblocktrans %}
+    </p>
+
+    <form method="post" action="{% url 'mumble:server_panels_save' %}">
+        {% csrf_token %}
+        <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr>
+                    <th style="text-align: left; padding: 0.4rem 0;">{% trans "Server" %}</th>
+                    <th style="text-align: left; padding: 0.4rem 0;">{% trans "Driver" %}</th>
+                    <th style="text-align: left; padding: 0.4rem 0;">{% trans "Show Tile" %}</th>
+                    <th style="text-align: left; padding: 0.4rem 0;">{% trans "Tile Heading" %}</th>
+                    <th style="text-align: left; padding: 0.4rem 0;">{% trans "Currently Reads" %}</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in server_rows %}
+                <tr style="{% if not row.bg_active %}opacity: 0.6;{% endif %}">
+                    <td style="padding: 0.55rem 0.5rem 0.55rem 0;">
+                        <input type="hidden" name="server_key" value="{{ row.server_key }}">
+                        <div>{{ row.name }}</div>
+                        <div style="color: var(--text-secondary); font-size: 0.8em;">
+                            <code>{{ row.server_key }}</code>{% if row.address %} · {{ row.address }}{% endif %}
+                        </div>
+                        {% if not row.bg_active %}
+                            <div style="color: #e67e22; font-size: 0.8em;">{% trans "Inactive in BG — tile is hidden regardless of this setting." %}</div>
+                        {% endif %}
+                    </td>
+                    <td style="padding: 0.55rem 0.5rem 0.55rem 0;">{{ row.driver }}</td>
+                    <td style="padding: 0.55rem 0.5rem 0.55rem 0;">
+                        <input
+                            type="checkbox"
+                            name="enabled__{{ row.server_key }}"
+                            {% if row.enabled %}checked{% endif %}
+                            {% if not can_change_server_panels %}disabled{% endif %}
+                        >
+                    </td>
+                    <td style="padding: 0.55rem 0.5rem 0.55rem 0;">
+                        <input
+                            type="text"
+                            name="label__{{ row.server_key }}"
+                            value="{{ row.label }}"
+                            maxlength="{{ label_max_length }}"
+                            placeholder="{{ row.default_title }}"
+                            style="width: 100%; max-width: 16rem; padding: 0.35rem 0.5rem;"
+                            {% if not can_change_server_panels %}disabled{% endif %}
+                        >
+                    </td>
+                    <td style="padding: 0.55rem 0.5rem 0.55rem 0;"><strong>{{ row.effective_title }}</strong></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="5" style="padding: 0.55rem 0;">{% trans "No servers reported by BG. Check BG control connectivity." %}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+
+        {% if server_rows %}
+            <div style="margin-top: 1rem;">
+                <button type="submit" class="btn btn-primary btn-sm" {% if not can_change_server_panels %}disabled{% endif %}>{% trans "Save" %}</button>
+                <span style="color: var(--text-secondary); font-size: 12px; margin-left: 0.6rem;">
+                    {% blocktrans %}Leave the heading blank to fall back to the server name, then to the driver default.{% endblocktrans %}
+                </span>
+            </div>
+        {% endif %}
+    </form>
+</section>
+{% endblock %}
