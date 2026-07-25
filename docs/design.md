@@ -98,6 +98,9 @@ Key FG permission families:
   - `add_temp_links`
   - `delete_temp_links`
 - temp-link editor-group membership, which can grant `Links` access and mutation without the explicit Django temp-link permissions
+- server-panel (profile tile) permissions:
+  - `view_server_panels`
+  - `change_server_panels`
 
 Important rule:
 
@@ -135,6 +138,18 @@ Current implementation:
 - FG renders one panel per available BG server
 - each panel shows a fixed-text `Server` field from the BG server label/name
 - if more than one eligible pilot is available, FG shows a `Mumble Authentication` selector for pilot choice
+
+Which servers get a panel, and what each panel is called, is controlled by the
+`Servers` tab (`mumble:server_panels`, backed by `ServerPanelSettings`):
+
+- a server is shown unless BG reports it `is_active=False` or an admin unticked
+  its tile; a server with no settings row is shown, so new BG servers surface
+  without admin action
+- hiding a tile is display-only — registrations, ACLs and voice access are untouched
+- the tile heading is the admin label, else the BG server name when that name is
+  not a bare `host:port` address, else the driver default (`MUMBLE` / `SHITSPEAK`)
+- settings are keyed by BG `server_key`, so a rebuilt BG row keeps its tile settings
+- if every server is hidden, FG renders no panels at all (not the no-BG fallback card)
 
 The panel displays:
 

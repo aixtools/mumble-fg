@@ -56,6 +56,7 @@ from .models import (
     IgnoredMurmurGroup,
     MumbleUser, MurmurModelLookupError, access_rule_snapshot, append_access_rule_audit,
     MurmurInventorySnapshot,
+    ServerPanelSettings,
     TempLink,
     resolve_murmur_models,
 )
@@ -926,6 +927,15 @@ def _controls_tabs(user, active_key: str) -> list[dict[str, object]]:
                 'active': active_key == 'links',
             }
         )
+    if _can_view_server_panels(user):
+        tabs.append(
+            {
+                'key': 'servers',
+                'label': _('Servers'),
+                'url': reverse('mumble:server_panels'),
+                'active': active_key == 'servers',
+            }
+        )
     return tabs
 
 
@@ -1085,6 +1095,8 @@ def mumble_controls(request):
         return redirect('mumble:group_mapping')
     if _can_view_temp_links(request.user):
         return redirect('mumble:temp_links')
+    if _can_view_server_panels(request.user):
+        return redirect('mumble:server_panels')
     return HttpResponseForbidden()
 
 
@@ -2237,3 +2249,115 @@ def group_mapping_cleanup_ignored(request):
         _('Removed %(count)s ignored mapping row(s).') % {'count': int(deleted) + int(deleted2)},
     )
     return _redirect_group_mapping(request)
+
+
+# ---------------------------------------------------------------------------
+# Servers tab — which BG servers get a profile tile, and what it is called
+# ---------------------------------------------------------------------------
+
+def _server_panels_admin_bypass(user) -> bool:
+    return bool(getattr(user, 'is_superuser', False))
+
+
+def _has_server_panels_perm(user, codename: str) -> bool:
+    return getattr(user, 'is_authenticated', False) and (
+        _server_panels_admin_bypass(user)
+        or user.has_perm(f'mumble_fg.{codename}')
+    )
+
+
+def _can_view_server_panels(user) -> bool:
+    return _has_server_panels_perm(user, 'view_server_panels')
+
+
+def _can_change_server_panels(user) -> bool:
+    return _can_view_server_panels(user) and _has_server_panels_perm(user, 'change_server_panels')
+
+
+def _server_panel_rows(servers, settings_by_key):
+    """Table rows for the Servers tab: BG facts plus the tile overrides."""
+    from fg.panels import get_profile_panel_provider
+
+    provider = get_profile_panel_provider()
+    rows = []
+    for server in servers:
+        server_key = str(getattr(server, 'server_key', '') or '').strip()
+        row = settings_by_key.get(server_key)
+        rows.append(
+            {
+                'server_key': server_key,
+                'name': server.name,
+                'address': server.address,
+                'driver': _('ShitSpeak') if server.is_shitspeak else _('Murmur'),
+                'bg_active': bool(server.is_active),
+                'enabled': bool(row.enabled) if row is not None else True,
+                'label': row.label if row is not None else '',
+                'default_title': provider.default_panel_title_for(server),
+                'effective_title': provider.panel_title_for(server, row),
+            }
+        )
+    return rows
+
+
+@login_required
+def server_panels(request):
+    if not _can_view_server_panels(request.user):
+        return HttpResponseForbidden()
+
+    servers = safe_list_servers()
+    settings_by_key = ServerPanelSettings.by_server_key(
+        getattr(server, 'server_key', '') for server in servers
+    )
+
+    return render(
+        request,
+        'fg/server_panels.html',
+        {
+            'controls_tabs': _controls_tabs(request.user, 'servers'),
+            'server_rows': _server_panel_rows(servers, settings_by_key),
+            'can_change_server_panels': _can_change_server_panels(request.user),
+            'label_max_length': ServerPanelSettings._meta.get_field('label').max_length,
+        },
+    )
+
+
+@require_POST
+@login_required
+def server_panels_save(request):
+    if not _can_change_server_panels(request.user):
+        return HttpResponseForbidden()
+
+    # Only keys BG currently reports are writable, so a crafted POST cannot
+    # seed settings rows for servers that do not exist.
+    known_keys = {
+        str(getattr(server, 'server_key', '') or '').strip()
+        for server in safe_list_servers()
+    }
+    known_keys.discard('')
+    if not known_keys:
+        messages.error(request, _('No Mumble servers available from BG right now.'))
+        return redirect('mumble:server_panels')
+
+    max_length = ServerPanelSettings._meta.get_field('label').max_length
+    saved = 0
+    for server_key in request.POST.getlist('server_key'):
+        server_key = str(server_key or '').strip()
+        if server_key not in known_keys:
+            continue
+        ServerPanelSettings.objects.update_or_create(
+            server_key=server_key,
+            defaults={
+                'enabled': f'enabled__{server_key}' in request.POST,
+                'label': str(request.POST.get(f'label__{server_key}', '') or '').strip()[:max_length],
+            },
+        )
+        saved += 1
+
+    if saved:
+        messages.success(
+            request,
+            _('Updated tile settings for %(count)s server(s).') % {'count': saved},
+        )
+    else:
+        messages.error(request, _('No known Mumble servers were submitted.'))
+    return redirect('mumble:server_panels')

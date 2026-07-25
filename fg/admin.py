@@ -21,7 +21,13 @@ from .models import (
     access_rule_snapshot,
     append_access_rule_audit,
 )
-from .models import AccessGrantSettings, MurmurModelLookupError, TempLinkSettings, resolve_murmur_models
+from .models import (
+    AccessGrantSettings,
+    MurmurModelLookupError,
+    ServerPanelSettings,
+    TempLinkSettings,
+    resolve_murmur_models,
+)
 
 
 def _get_eve_character_model():
@@ -265,6 +271,46 @@ class AccessGrantSettingsAdmin(admin.ModelAdmin):
     def changelist_view(self, request, extra_context=None):
         settings = AccessGrantSettings.load()
         return redirect(f'../accessgrantsettings/{settings.pk}/change/')
+
+
+@admin.register(ServerPanelSettings)
+class ServerPanelSettingsAdmin(admin.ModelAdmin):
+    """Fallback surface for the Servers tab (mumble:server_panels).
+
+    The model uses custom permissions, so map the admin's checks onto them
+    instead of the default add/change/delete codenames Django would look for.
+    """
+
+    list_display = ('server_key', 'enabled', 'label', 'updated_at')
+    list_filter = ('enabled',)
+    search_fields = ('server_key', 'label')
+
+    def _can_view(self, request):
+        return request.user.is_active and (
+            request.user.is_superuser
+            or request.user.has_perm('mumble_fg.view_server_panels')
+        )
+
+    def _can_change(self, request):
+        return self._can_view(request) and (
+            request.user.is_superuser
+            or request.user.has_perm('mumble_fg.change_server_panels')
+        )
+
+    def has_module_permission(self, request):
+        return self._can_view(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._can_view(request)
+
+    def has_add_permission(self, request):
+        return self._can_change(request)
+
+    def has_change_permission(self, request, obj=None):
+        return self._can_change(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return self._can_change(request)
 
 
 @admin.register(AccessRule)

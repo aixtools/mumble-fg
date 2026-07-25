@@ -20,6 +20,7 @@ class MurmurPanelDescriptor:
     key: str
     priority: int
     template: str
+    panel_title: str
     server: Any
     account: Any
     temp_password: str | None
@@ -45,6 +46,7 @@ class MurmurPanelDescriptor:
             'key': self.key,
             'priority': self.priority,
             'template': self.template,
+            'panel_title': self.panel_title,
             'server': self.server,
             'account': self.account,
             'temp_password': self.temp_password,
@@ -73,6 +75,7 @@ class ProfilePanelProvider(ABC):
     provider_name = 'generic'
     panel_priority = 300
     panel_template = 'fg/panels/profile_panel.html'
+    panel_title = 'MUMBLE'
 
     @abstractmethod
     def build_panels(self, request) -> list[dict[str, Any]]:
@@ -88,6 +91,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
     # opt-in prefix ('mumble-') so the dashboard still surfaces it.
     shitspeak_panel_key_prefix = 'mumble-beta-server-'
     shitspeak_panel_template = 'fg/panels/shitspeak_panel.html'
+    shitspeak_panel_title = 'SHITSPEAK'
 
     @staticmethod
     def _eligible_pilots(user) -> list[dict[str, Any]]:
@@ -174,6 +178,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         eligible_pilots: list[dict[str, Any]],
         key_prefix: str = 'murmur-server-',
         template: str | None = None,
+        title: str | None = None,
         endpoints: tuple[str, ...] = (),
     ) -> MurmurPanelDescriptor:
         display_name, display_name_is_fallback = self._display_name(
@@ -196,6 +201,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             key=f'{key_prefix}{getattr(server, "pk", "profile")}',
             priority=self.panel_priority,
             template=template or self.panel_template,
+            panel_title=title or self.panel_title,
             server=server,
             account=account,
             temp_password=request.session.pop('murmur_temp_password', None),
@@ -213,6 +219,75 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
             password_set_url=reverse('mumble:profile_set_password'),
             endpoints=endpoints,
         )
+
+    @staticmethod
+    def _is_address_like(value: str) -> bool:
+        """True for bare "host:port" / dotted-hostname strings.
+
+        BG's ``name`` is often just the connection string. That is an address,
+        not a display name: it already appears in the card body's Server row and
+        reads badly as a heading, so it should not win over the driver default.
+        """
+        candidate = str(value or '').strip()
+        if not candidate or ' ' in candidate:
+            return False
+        host = candidate
+        if candidate.count(':') == 1:
+            head, _, tail = candidate.rpartition(':')
+            if tail.isdigit():
+                return True
+            host = head or candidate
+        return '.' in host
+
+    @classmethod
+    def default_panel_title_for(cls, server) -> str:
+        """Built-in heading for a server, before any admin label."""
+        if getattr(server, 'is_shitspeak', False):
+            return cls.shitspeak_panel_title
+        return cls.panel_title
+
+    @classmethod
+    def panel_title_for(cls, server, panel_settings=None) -> str:
+        """Tile heading: admin label, else a real BG server name, else the default.
+
+        Also used by the admin Servers tab to preview what a tile will read.
+        """
+        label = str(getattr(panel_settings, 'label', '') or '').strip()
+        if label:
+            return label
+        name = str(getattr(server, 'name', '') or '').strip()
+        if name and not cls._is_address_like(name):
+            return name
+        return cls.default_panel_title_for(server)
+
+    @staticmethod
+    def _visible_servers(servers: list, settings_by_key: dict[str, Any]) -> list:
+        """Drop servers BG marked inactive and servers an admin hid.
+
+        A server with no ServerPanelSettings row is visible, so new BG servers
+        surface without admin action.
+        """
+        visible = []
+        for server in servers:
+            if not getattr(server, 'is_active', True):
+                continue
+            row = settings_by_key.get(str(getattr(server, 'server_key', '') or '').strip())
+            if row is not None and not row.enabled:
+                continue
+            visible.append(server)
+        return visible
+
+    @staticmethod
+    def _panel_settings_by_key(servers: list) -> dict[str, Any]:
+        """Tile settings for these servers; empty (all defaults) if unavailable."""
+        from fg.models import ServerPanelSettings
+
+        try:
+            return ServerPanelSettings.by_server_key(
+                getattr(server, 'server_key', '') for server in servers
+            )
+        except Exception:  # noqa: BLE001 - never let a settings read break the profile page
+            return {}
 
     @staticmethod
     def _display_name(user, *, account, eligible_pilots: list[dict[str, Any]]) -> tuple[str, bool]:
@@ -249,6 +324,14 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                 ).to_panel_context()
             ]
 
+        settings_by_key = self._panel_settings_by_key(servers)
+        servers = self._visible_servers(servers, settings_by_key)
+        if not servers:
+            # Every server is hidden (BG-inactive or admin-disabled). Show
+            # nothing rather than the no-BG fallback card — the tiles were
+            # deliberately turned off.
+            return []
+
         target_user_id = request.user.id
         try:
             from fg.views import _resolve_bg_pkid_for_mockui
@@ -266,6 +349,9 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
         descriptors: list[MurmurPanelDescriptor] = []
         for server in servers:
             account = accounts_by_server.get(server.pk)
+            panel_settings = settings_by_key.get(
+                str(getattr(server, 'server_key', '') or '').strip()
+            )
             if getattr(server, 'is_shitspeak', False):
                 # ShitSpeak is a different stack: its own card, one shared
                 # registration, and a region selector over the cluster endpoints.
@@ -282,6 +368,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                         eligible_pilots=eligible_pilots,
                         key_prefix=self.shitspeak_panel_key_prefix,
                         template=self.shitspeak_panel_template,
+                        title=self.panel_title_for(server, panel_settings),
                         endpoints=endpoints,
                     )
                 )
@@ -292,6 +379,7 @@ class GenericProfilePanelProvider(ProfilePanelProvider):
                         server=server,
                         account=account,
                         eligible_pilots=eligible_pilots,
+                        title=self.panel_title_for(server, panel_settings),
                     )
                 )
 
