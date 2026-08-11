@@ -416,6 +416,20 @@ class BgControlClient:
             raise BgSyncError('Server probe response did not include servers')
         return [server for server in servers if isinstance(server, dict)]
 
+    def get_connected_users(self) -> list[dict[str, Any]]:
+        """Return the users currently connected across all active Murmur servers.
+
+        Each entry carries name, cert_hash, ip, channel_path, mumble_userid,
+        cube_user_pk, online/idle/self_mute and server_key (see BG's
+        /v1/connected-users). Used by counter-intel; the raw IP is never
+        rendered, only checked against the known-VPN table.
+        """
+        response = _get_json('/v1/connected-users')
+        users = response.get('users')
+        if not isinstance(users, list):
+            raise BgSyncError('Connected-users response did not include users')
+        return [user for user in users if isinstance(user, dict)]
+
     def get_server_inventory(self, server_key: str, *, refresh: bool = False) -> dict[str, Any]:
         normalized_server_key = str(server_key or '').strip()
         if not normalized_server_key:
